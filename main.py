@@ -6,7 +6,6 @@ def main():
     )
 
     picam2.configure(config)
-    picam2.start()
 
     while True:
         frame = picam2.capture_array()
