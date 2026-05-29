@@ -1,17 +1,61 @@
-def main():
-    picam2 = Picamera2()
+import cv2 as cv
+import numpy as np
+import time
+from picamera2 import Picamera2
+from libcamera import controls
 
-    config = picam2.create_video_configuration(
-        main={"size": (1920, 1080), "format": "RGB888"}
+
+def order_points(pts):
+    pts = pts.astype(np.float32)
+
+    s = pts.sum(axis=1)
+    diff = np.diff(pts, axis=1).reshape(-1)
+
+    tl = pts[np.argmin(s)]
+    br = pts[np.argmax(s)]
+    tr = pts[np.argmin(diff)]
+    bl = pts[np.argmax(diff)]
+
+    return np.array([tl, tr, br, bl], dtype=np.float32)
+
+
+def find_cassette_quad(frame):
+    gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+    gray = cv.GaussianBlur(gray, (7, 7), 0)
+
+    edges = cv.Canny(gray, 50, 150)
+
+    kernel = cv.getStructuringElement(cv.MORPH_RECT, (7, 7))
+    edges = cv.morphologyEx(edges, cv.MORPH_CLOSE, kernel, iterations=2)
+
+    contours, _ = cv.findContours(
+        edges,
+        cv.RETR_EXTERNAL,
+        cv.CHAIN_APPROX_SIMPLE
     )
 
-    picam2.configure(config)
-    picam2.start()
+    contours = sorted(contours, key=cv.contourArea, reverse=True)
 
-    while True:
-        frame = picam2.capture_array()
+    h, w = frame.shape[:2]
+    min_area = 0.03 * (h * w)
 
-        cv.imshow("Lateral Flow Reader", frame)
+    for cnt in contours:
+        area = cv.contourArea(cnt)
 
-        if cv.waitKey(1) & 0xFF == ord("q"):
-            break
+        if area < min_area:
+            continue
+
+        peri = cv.arcLength(cnt, True)
+
+        approx = cv.approxPolyDP(
+            cnt,
+            0.02 * peri,
+            True
+        )
+
+        if len(approx) == 4 and cv.isContourConvex(approx):
+            return order_points(
+                approx.reshape(4, 2)
+            )
+
+    return None
