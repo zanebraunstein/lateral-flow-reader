@@ -59,3 +59,33 @@ def find_cassette_quad(frame):
             )
 
     return None
+
+def main():
+    picam2 = Picamera2()
+
+    config = picam2.create_video_configuration(
+        main={
+            "size": (1920, 1080),
+            "format": "RGB888"
+        }
+    )
+
+    picam2.configure(config)
+    picam2.start()
+
+    time.sleep(0.5)
+
+    try:
+        picam2.set_controls({
+            "AfMode": controls.AfModeEnum.Continuous
+        })
+    except Exception as e:
+        print("Autofocus unavailable:", e)
+
+    while True:
+        frame_rgb = picam2.capture_array()
+
+        frame = cv.cvtColor(
+            frame_rgb,
+            cv.COLOR_RGB2BGR
+        )
