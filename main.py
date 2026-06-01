@@ -60,6 +60,7 @@ def find_cassette_quad(frame):
 
     return None
 
+
 def main():
     picam2 = Picamera2()
 
@@ -89,3 +90,51 @@ def main():
             frame_rgb,
             cv.COLOR_RGB2BGR
         )
+
+        disp = frame.copy()
+
+        quad = find_cassette_quad(frame)
+
+        if quad is not None:
+            cv.polylines(
+                disp,
+                [quad.astype(np.int32)],
+                True,
+                (0, 255, 0),
+                3
+            )
+
+            cv.putText(
+                disp,
+                "Cassette detected",
+                (20, 40),
+                cv.FONT_HERSHEY_SIMPLEX,
+                1.0,
+                (0, 100, 0),
+                2
+            )
+        else:
+            cv.putText(
+                disp,
+                "Searching...",
+                (20, 40),
+                cv.FONT_HERSHEY_SIMPLEX,
+                1.0,
+                (0, 0, 255),
+                2
+            )
+
+        cv.imshow(
+            "Lateral Flow Reader",
+            disp
+        )
+
+        if cv.waitKey(1) & 0xFF == ord("q"):
+            break
+
+    cv.destroyAllWindows()
+    picam2.stop()
+
+
+if __name__ == "__main__":
+    main()
