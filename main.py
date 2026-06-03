@@ -5,6 +5,28 @@ from picamera2 import Picamera2
 from libcamera import controls
 
 
+CANON_W = 900
+CANON_H = 320
+
+def warp_cassette(frame, quad):
+    dst = np.array([
+        [0, 0],
+        [CANON_W - 1, 0],
+        [CANON_W - 1, CANON_H - 1],
+        [0, CANON_H - 1]
+    ], dtype=np.float32)
+
+    M = cv.getPerspectiveTransform(
+        quad.astype(np.float32),
+        dst
+    )
+
+    return cv.warpPerspective(
+        frame,
+        M,
+        (CANON_W, CANON_H)
+    )
+
 def order_points(pts):
     pts = pts.astype(np.float32)
 
