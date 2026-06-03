@@ -117,6 +117,17 @@ def main():
 
         quad = find_cassette_quad(frame)
 
+        warped = None
+
+        if quad is not None:
+            warped = warp_cassette(frame, quad)
+        
+        if warped is not None:
+            cv.imshow(
+                "Warped Cassette",
+                warped
+            )
+
         if quad is not None:
             cv.polylines(
                 disp,
