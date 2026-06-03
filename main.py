@@ -121,6 +121,16 @@ def main():
 
         if quad is not None:
             warped = warp_cassette(frame, quad)
+
+            cv.putText(
+                warped,
+                "Canonical Cassette View",
+                (20, 35),
+                cv.FONT_HERSHEY_SIMPLEX,
+                0.8,
+                (0, 255, 0),
+                2
+            )
         
         if warped is not None:
             cv.imshow(
