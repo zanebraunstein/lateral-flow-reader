@@ -5,9 +5,11 @@ from picamera2 import Picamera2
 from libcamera import controls
 
 
+# Canonical cassette geometry
 CANON_W = 900
 CANON_H = 320
 
+# Results window ROI in canonical warped cassette view
 WINDOW_X0 = 0.55
 WINDOW_Y0 = 0.22
 WINDOW_X1 = 0.93
@@ -146,6 +148,7 @@ def main():
                 2
             )
 
+            # Results window ROI
             x0 = int(WINDOW_X0 * CANON_W)
             y0 = int(WINDOW_Y0 * CANON_H)
             x1 = int(WINDOW_X1 * CANON_W)
