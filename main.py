@@ -8,6 +8,11 @@ from libcamera import controls
 CANON_W = 900
 CANON_H = 320
 
+WINDOW_X0 = 0.55
+WINDOW_Y0 = 0.22
+WINDOW_X1 = 0.93
+WINDOW_Y1 = 0.78
+
 def warp_cassette(frame, quad):
     dst = np.array([
         [0, 0],
