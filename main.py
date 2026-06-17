@@ -14,6 +14,11 @@ WINDOW_X1 = 0.93
 WINDOW_Y1 = 0.78
 
 def warp_cassette(frame, quad):
+    x0 = int(WINDOW_X0 * CANON_W)
+    y0 = int(WINDOW_Y0 * CANON_H)
+
+    x1 = int(WINDOW_X1 * CANON_W)
+    y1 = int(WINDOW_Y1 * CANON_H)
     dst = np.array([
         [0, 0],
         [CANON_W - 1, 0],
@@ -24,6 +29,14 @@ def warp_cassette(frame, quad):
     M = cv.getPerspectiveTransform(
         quad.astype(np.float32),
         dst
+    )
+
+    cv.rectangle(
+    warped,
+    (x0, y0),
+    (x1, y1),
+    (0, 255, 0),
+    2
     )
 
     return cv.warpPerspective(
