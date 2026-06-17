@@ -13,37 +13,6 @@ WINDOW_Y0 = 0.22
 WINDOW_X1 = 0.93
 WINDOW_Y1 = 0.78
 
-def warp_cassette(frame, quad):
-    x0 = int(WINDOW_X0 * CANON_W)
-    y0 = int(WINDOW_Y0 * CANON_H)
-
-    x1 = int(WINDOW_X1 * CANON_W)
-    y1 = int(WINDOW_Y1 * CANON_H)
-    dst = np.array([
-        [0, 0],
-        [CANON_W - 1, 0],
-        [CANON_W - 1, CANON_H - 1],
-        [0, CANON_H - 1]
-    ], dtype=np.float32)
-
-    M = cv.getPerspectiveTransform(
-        quad.astype(np.float32),
-        dst
-    )
-
-    cv.rectangle(
-    warped,
-    (x0, y0),
-    (x1, y1),
-    (0, 255, 0),
-    2
-    )
-
-    return cv.warpPerspective(
-        frame,
-        M,
-        (CANON_W, CANON_H)
-    )
 
 def order_points(pts):
     pts = pts.astype(np.float32)
@@ -101,6 +70,26 @@ def find_cassette_quad(frame):
     return None
 
 
+def warp_cassette(frame, quad):
+    dst = np.array([
+        [0, 0],
+        [CANON_W - 1, 0],
+        [CANON_W - 1, CANON_H - 1],
+        [0, CANON_H - 1]
+    ], dtype=np.float32)
+
+    M = cv.getPerspectiveTransform(
+        quad.astype(np.float32),
+        dst
+    )
+
+    return cv.warpPerspective(
+        frame,
+        M,
+        (CANON_W, CANON_H)
+    )
+
+
 def main():
     picam2 = Picamera2()
 
@@ -132,31 +121,13 @@ def main():
         )
 
         disp = frame.copy()
+        warped = None
 
         quad = find_cassette_quad(frame)
-
-        warped = None
 
         if quad is not None:
             warped = warp_cassette(frame, quad)
 
-            cv.putText(
-                warped,
-                "Canonical Cassette View",
-                (20, 35),
-                cv.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (0, 255, 0),
-                2
-            )
-        
-        if warped is not None:
-            cv.imshow(
-                "Warped Cassette",
-                warped
-            )
-
-        if quad is not None:
             cv.polylines(
                 disp,
                 [quad.astype(np.int32)],
@@ -174,6 +145,27 @@ def main():
                 (0, 255, 0),
                 2
             )
+
+            x0 = int(WINDOW_X0 * CANON_W)
+            y0 = int(WINDOW_Y0 * CANON_H)
+            x1 = int(WINDOW_X1 * CANON_W)
+            y1 = int(WINDOW_Y1 * CANON_H)
+
+            cv.rectangle(
+                warped,
+                (x0, y0),
+                (x1, y1),
+                (0, 255, 0),
+                2
+            )
+
+            results_window = warped[y0:y1, x0:x1]
+
+            cv.imshow(
+                "Results Window",
+                results_window
+            )
+
         else:
             cv.putText(
                 disp,
@@ -183,6 +175,12 @@ def main():
                 1.0,
                 (0, 0, 255),
                 2
+            )
+
+        if warped is not None:
+            cv.imshow(
+                "Warped Cassette",
+                warped
             )
 
         cv.imshow(
