@@ -181,9 +181,32 @@ def main():
 
             results_window = warped[y0:y1, x0:x1]
 
+            rh, rw = results_window.shape[:2]
+
+            sx0 = int(STRIP_X0_FRAC * rw)
+            sx1 = int(STRIP_X1_FRAC * rw)
+
+            sy0 = int(STRIP_Y0_FRAC * rh)
+            sy1 = int(STRIP_Y1_FRAC * rh)
+
+            cv.rectangle(
+                results_window,
+                (sx0, sy0),
+                (sx1, sy1),
+                (255, 0, 255),
+                2
+            )
+
+            strip_roi = extract_strip_roi(results_window)
+
             cv.imshow(
                 "Results Window",
                 results_window
+            )
+
+            cv.imshow(
+                "Strip ROI",
+                strip_roi
             )
 
         else:
