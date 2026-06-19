@@ -97,6 +97,17 @@ def warp_cassette(frame, quad):
         (CANON_W, CANON_H)
     )
 
+def extract_strip_roi(results_window):
+    h, w = results_window.shape[:2]
+
+    y0 = int(STRIP_Y0_FRAC * h)
+    y1 = int(STRIP_Y1_FRAC * h)
+
+    x0 = int(STRIP_X0_FRAC * w)
+    x1 = int(STRIP_X1_FRAC * w)
+
+    return results_window[y0:y1, x0:x1]
+
 
 def main():
     picam2 = Picamera2()
