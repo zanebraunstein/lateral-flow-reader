@@ -15,6 +15,12 @@ WINDOW_Y0 = 0.22
 WINDOW_X1 = 0.93
 WINDOW_Y1 = 0.78
 
+STRIP_Y0_FRAC = 0.44
+STRIP_Y1_FRAC = 0.66
+
+STRIP_X0_FRAC = 0.30
+STRIP_X1_FRAC = 0.82
+
 
 def order_points(pts):
     pts = pts.astype(np.float32)
