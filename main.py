@@ -108,6 +108,20 @@ def extract_strip_roi(results_window):
 
     return results_window[y0:y1, x0:x1]
 
+def redness_profile(strip_bgr):
+    lab = cv.cvtColor(strip_bgr, cv.COLOR_BGR2LAB)
+
+    a = lab[:, :, 1].astype(np.float32)
+
+    # Collapse vertically into 1D profile
+    profile = np.median(a, axis=0)
+
+    # Smooth profile
+    kernel = np.ones(21, dtype=np.float32) / 21.0
+    profile = np.convolve(profile, kernel, mode="same")
+
+    return profile
+
 
 def main():
     picam2 = Picamera2()
