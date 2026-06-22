@@ -122,6 +122,39 @@ def redness_profile(strip_bgr):
 
     return profile
 
+def draw_profile(profile, width=600, height=200):
+    canvas = np.zeros((height, width, 3), dtype=np.uint8)
+
+    p = profile.astype(np.float32)
+
+    p -= np.min(p)
+
+    if np.max(p) > 1e-6:
+        p /= np.max(p)
+
+    xs = np.linspace(
+        0,
+        width - 1,
+        len(p)
+    ).astype(np.int32)
+
+    ys = (
+        height - 1
+        - p * (height - 1)
+    ).astype(np.int32)
+
+    pts = np.stack([xs, ys], axis=1)
+
+    cv.polylines(
+        canvas,
+        [pts],
+        False,
+        (255, 255, 255),
+        2
+    )
+
+    return canvas
+
 
 def main():
     picam2 = Picamera2()
