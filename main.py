@@ -195,6 +195,18 @@ def band_width_peak(profile, idx, frac=0.5):
 
     return right - left
 
+def filter_band_candidates(profile):
+    peaks = find_peak_candidates(profile)
+
+    valid = []
+
+    for idx in peaks:
+        width = band_width_peak(profile, idx)
+
+        if MIN_BAND_WIDTH <= width <= MAX_BAND_WIDTH:
+            valid.append(idx)
+
+    return valid
 
 def main():
     picam2 = Picamera2()
