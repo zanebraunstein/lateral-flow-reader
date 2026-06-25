@@ -180,6 +180,22 @@ def find_peak_candidates(profile):
 
     return candidates
 
+def band_width_peak(profile, idx, frac=0.5):
+    peak = float(profile[idx])
+    base = float(np.median(profile))
+    level = base + frac * (peak - base)
+
+    left = idx
+    while left > 0 and profile[left] > level:
+        left -= 1
+
+    right = idx
+    while right < len(profile) - 1 and profile[right] > level:
+        right += 1
+
+    return right - left
+
+
 def main():
     picam2 = Picamera2()
 
