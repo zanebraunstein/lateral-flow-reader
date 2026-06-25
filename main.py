@@ -159,6 +159,26 @@ def draw_profile(profile, width=600, height=200):
 
     return canvas
 
+def find_peak_candidates(profile):
+    n = len(profile)
+
+    if n < 50:
+        return []
+
+    pad = int(EDGE_EXCLUDE_FRAC * n)
+
+    candidates = []
+
+    for i in range(2, n - 2):
+        if i < pad or i > (n - 1 - pad):
+            continue
+
+        if profile[i] >= profile[i - 1] and profile[i] >= profile[i + 1]:
+            candidates.append(i)
+
+    candidates.sort(key=lambda i: profile[i], reverse=True)
+
+    return candidates
 
 def main():
     picam2 = Picamera2()
