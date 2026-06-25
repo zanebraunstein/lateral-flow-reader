@@ -246,6 +246,10 @@ def main():
 
             strip_roi = extract_strip_roi(results_window)
 
+            profile = redness_profile(strip_roi)
+
+            profile_vis = draw_profile(profile)
+
             cv.imshow(
                 "Results Window",
                 results_window
@@ -254,6 +258,11 @@ def main():
             cv.imshow(
                 "Strip ROI",
                 strip_roi
+            )
+
+            cv.imshow(
+                "Signal Profile",
+                profile_vis
             )
 
         else:
