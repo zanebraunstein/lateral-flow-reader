@@ -21,6 +21,10 @@ STRIP_Y1_FRAC = 0.66
 STRIP_X0_FRAC = 0.30
 STRIP_X1_FRAC = 0.82
 
+EDGE_EXCLUDE_FRAC = 0.12
+MIN_BAND_WIDTH = 6
+MAX_BAND_WIDTH = 45
+
 
 def order_points(pts):
     pts = pts.astype(np.float32)
