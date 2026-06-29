@@ -330,6 +330,8 @@ def main():
                 profile_vis
             )
 
+            cv.imshow("Signal Profile", profile_vis)
+
         else:
             cv.putText(
                 disp,
