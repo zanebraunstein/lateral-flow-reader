@@ -302,6 +302,19 @@ def main():
 
             profile_vis = draw_profile(profile)
 
+            candidates = filter_band_candidates(profile)
+
+            for idx in candidates[:5]:
+                x = int(idx / len(profile) * profile_vis.shape[1])
+
+                cv.line(
+                    profile_vis,
+                    (x, 0),
+                    (x, profile_vis.shape[0]),
+                    (0, 255, 255),
+                    1
+                )
+
             cv.imshow(
                 "Results Window",
                 results_window
