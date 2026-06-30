@@ -25,6 +25,11 @@ EDGE_EXCLUDE_FRAC = 0.12
 MIN_BAND_WIDTH = 6
 MAX_BAND_WIDTH = 45
 
+EXPECTED_C_FRAC = 0.80
+EXPECTED_T_FRAC = 0.45
+SEARCH_RADIUS_FRAC = 0.18
+MIN_TC_SEPARATION_FRAC = 0.18
+
 
 def order_points(pts):
     pts = pts.astype(np.float32)
