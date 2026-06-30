@@ -240,6 +240,24 @@ def pick_peak_near(profile, expected_frac, radius_frac):
 
     return best
 
+def pick_t_c_from_peaks(profile):
+    t_idx = pick_peak_near(profile, EXPECTED_T_FRAC, SEARCH_RADIUS_FRAC)
+    c_idx = pick_peak_near(profile, EXPECTED_C_FRAC, SEARCH_RADIUS_FRAC)
+
+    if t_idx is not None and c_idx is not None:
+        min_sep = int(MIN_TC_SEPARATION_FRAC * len(profile))
+
+        if abs(t_idx - c_idx) < min_sep:
+            if profile[c_idx] >= profile[t_idx]:
+                t_idx = None
+            else:
+                c_idx = t_idx
+                t_idx = None
+
+    if c_idx is None and t_idx is not None:
+        c_idx, t_idx = t_idx, None
+
+    return t_idx, c_idx
 
 def main():
     picam2 = Picamera2()
