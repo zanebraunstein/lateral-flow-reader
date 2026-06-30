@@ -213,6 +213,34 @@ def filter_band_candidates(profile):
 
     return valid
 
+def pick_peak_near(profile, expected_frac, radius_frac):
+    n = len(profile)
+
+    expected = int(expected_frac * n)
+    radius = int(radius_frac * n)
+
+    lo = max(0, expected - radius)
+    hi = min(n - 1, expected + radius)
+
+    candidates = filter_band_candidates(profile)
+
+    best = None
+    best_score = -1e9
+
+    for idx in candidates:
+        if idx < lo or idx > hi:
+            continue
+
+        distance_penalty = abs(idx - expected) / (radius + 1e-6)
+        score = float(profile[idx]) - 0.35 * distance_penalty
+
+        if score > best_score:
+            best_score = score
+            best = idx
+
+    return best
+
+
 def main():
     picam2 = Picamera2()
 
