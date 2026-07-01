@@ -355,6 +355,52 @@ def main():
 
             candidates = filter_band_candidates(profile)
 
+            t_idx, c_idx = pick_t_c_from_peaks(profile)
+
+            # Draw detected Test line
+            if t_idx is not None:
+                x = int(t_idx / len(profile) * profile_vis.shape[1])
+
+                cv.line(
+                    profile_vis,
+                    (x, 0),
+                    (x, profile_vis.shape[0]),
+                    (255, 255, 0),
+                    2
+                )
+
+                cv.putText(
+                    profile_vis,
+                    "T",
+                    (x + 4, 20),
+                    cv.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255, 255, 0),
+                    2
+                )
+
+            # Draw detected Control line
+            if c_idx is not None:
+                x = int(c_idx / len(profile) * profile_vis.shape[1])
+
+                cv.line(
+                    profile_vis,
+                    (x, 0),
+                    (x, profile_vis.shape[0]),
+                    (0, 255, 0),
+                    2
+                )
+
+                cv.putText(
+                    profile_vis,
+                    "C",
+                    (x + 4, 45),
+                    cv.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0, 255, 0),
+                    2
+                )
+
             for idx in candidates[:5]:
                 x = int(idx / len(profile) * profile_vis.shape[1])
 
