@@ -259,6 +259,27 @@ def pick_t_c_from_peaks(profile):
 
     return t_idx, c_idx
 
+def band_strength(profile, idx, half_width=6):
+    """
+    Estimate band strength as peak height above local baseline.
+    """
+    if idx is None:
+        return 0.0
+
+    n = len(profile)
+
+    lo = max(0, idx - half_width)
+    hi = min(n, idx + half_width + 1)
+
+    peak = np.max(profile[lo:hi])
+
+    mask = np.ones(n, dtype=bool)
+    mask[lo:hi] = False
+
+    baseline = np.median(profile[mask])
+
+    return float(peak - baseline)
+
 def main():
     picam2 = Picamera2()
 
