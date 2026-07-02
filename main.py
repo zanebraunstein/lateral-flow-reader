@@ -430,6 +430,16 @@ def main():
                     2
                 )
 
+                cv.putText(
+                    disp,
+                    f"T={t_strength:.2f}  C={c_strength:.2f}  T/C={tc_ratio:.2f}",
+                    (20, 80),
+                    cv.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (255,255,255),
+                    2
+                )
+
             for idx in candidates[:5]:
                 x = int(idx / len(profile) * profile_vis.shape[1])
 
