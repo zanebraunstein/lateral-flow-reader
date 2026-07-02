@@ -378,6 +378,14 @@ def main():
 
             t_idx, c_idx = pick_t_c_from_peaks(profile)
 
+            t_strength = band_strength(profile, t_idx)
+            c_strength = band_strength(profile, c_idx)
+
+            if c_strength > 1e-6:
+                tc_ratio = t_strength / c_strength
+            else:
+                tc_ratio = 0.0
+
             # Draw detected Test line
             if t_idx is not None:
                 x = int(t_idx / len(profile) * profile_vis.shape[1])
