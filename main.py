@@ -514,6 +514,7 @@ def main():
         if cv.waitKey(1) & 0xFF == ord("q"):
             break
 
+    csv_file.close()
     cv.destroyAllWindows()
     picam2.stop()
 
