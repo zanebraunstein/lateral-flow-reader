@@ -3,6 +3,7 @@ import numpy as np
 import time
 from picamera2 import Picamera2
 from libcamera import controls
+import csv
 
 
 # Canonical cassette geometry
@@ -301,6 +302,18 @@ def main():
         })
     except Exception as e:
         print("Autofocus unavailable:", e)
+
+    start_time = time.time()
+
+    csv_file = open("signal_log.csv", "w", newline="")
+    writer = csv.writer(csv_file)
+
+    writer.writerow([
+        "time_seconds",
+        "test_strength",
+        "control_strength",
+        "tc_ratio"
+    ])
 
     while True:
         frame_rgb = picam2.capture_array()
