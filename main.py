@@ -398,6 +398,15 @@ def main():
                 tc_ratio = t_strength / c_strength
             else:
                 tc_ratio = 0.0
+            
+            elapsed = time.time() - start_time
+
+            writer.writerow([
+                f"{elapsed:.2f}",
+                f"{t_strength:.3f}",
+                f"{c_strength:.3f}",
+                f"{tc_ratio:.3f}"
+            ])
 
             # Draw detected Test line
             if t_idx is not None:
