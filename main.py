@@ -139,7 +139,8 @@ def redness_profile(strip_bgr):
     )
 
     # Smooth profile
-    kernel = np.ones(21, dtype=np.float32) / 21.0
+    kernel = np.ones(15, dtype=np.float32)
+    kernel /= kernel.sum()
     profile = np.convolve(profile, kernel, mode="same")
 
     return profile
