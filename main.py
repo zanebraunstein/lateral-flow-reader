@@ -143,6 +143,11 @@ def redness_profile(strip_bgr):
     kernel /= kernel.sum()
     profile = np.convolve(profile, kernel, mode="same")
 
+    profile -= np.median(profile)
+
+    mad = np.median(np.abs(profile)) + 1e-6
+    profile /= mad
+
     return profile
 
 def draw_profile(profile, width=600, height=200):
