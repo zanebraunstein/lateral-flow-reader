@@ -455,6 +455,34 @@ def main():
 
             t_idx, c_idx = pick_t_c_from_peaks(profile)
 
+            strip_x0 = int(STRIP_X0_FRAC * results_window.shape[1])
+
+            if c_idx is not None:
+                canon_x = x0 + strip_x0 + c_idx
+
+                draw_band_line_on_main(
+                    disp,
+                    quad,
+                    canon_x,
+                    y0,
+                    y1,
+                    "C",
+                    (0,255,0)
+                )
+
+            if t_idx is not None:
+                canon_x = x0 + strip_x0 + t_idx
+
+                draw_band_line_on_main(
+                    disp,
+                    quad,
+                    canon_x,
+                    y0,
+                    y1,
+                    "T",
+                    (255,255,0)
+                )
+
             t_strength = band_strength(profile, t_idx)
             c_strength = band_strength(profile, c_idx)
 
