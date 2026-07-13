@@ -107,6 +107,52 @@ def warp_cassette(frame, quad):
         (CANON_W, CANON_H)
     )
 
+def draw_band_line_on_main(
+    frame,
+    quad,
+    canon_x,
+    y0,
+    y1,
+    label,
+    color
+):
+    dst = np.array([
+        [0, 0],
+        [CANON_W - 1, 0],
+        [CANON_W - 1, CANON_H - 1],
+        [0, CANON_H - 1]
+    ], dtype=np.float32)
+
+    Minv = cv.getPerspectiveTransform(
+        dst,
+        quad.astype(np.float32)
+    )
+
+    pts = np.array([
+        [[canon_x, y0]],
+        [[canon_x, y1]]
+    ], dtype=np.float32)
+
+    pts = cv.perspectiveTransform(
+        pts,
+        Minv
+    ).reshape(-1, 2)
+
+    p0 = tuple(np.round(pts[0]).astype(int))
+    p1 = tuple(np.round(pts[1]).astype(int))
+
+    cv.line(frame, p0, p1, color, 2)
+
+    cv.putText(
+        frame,
+        label,
+        (p0[0] + 5, p0[1] - 5),
+        cv.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        color,
+        2
+    )
+
 def extract_strip_roi(results_window):
     h, w = results_window.shape[:2]
 
