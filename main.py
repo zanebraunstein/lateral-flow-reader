@@ -599,8 +599,15 @@ def main():
                     (255,255,0)
                 )
 
-            t_strength = band_strength(profile, t_idx)
-            c_strength = band_strength(profile, c_idx)
+            t_strength, t_snr = band_signal_snr(
+                profile,
+                t_idx
+            )
+
+            c_strength, c_snr = band_signal_snr(
+                profile,
+                c_idx
+            )
 
             if c_strength > 1e-6:
                 tc_ratio = t_strength / c_strength
