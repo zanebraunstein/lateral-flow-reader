@@ -609,6 +609,9 @@ def main():
                 c_idx
             )
 
+            control_present = c_snr >= 6.0
+            test_present = t_snr >= 5.0 and control_present
+
             if c_strength > 1e-6:
                 tc_ratio = t_strength / c_strength
             else:
