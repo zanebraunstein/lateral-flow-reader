@@ -466,7 +466,11 @@ def main():
         "time_seconds",
         "test_strength",
         "control_strength",
-        "tc_ratio"
+        "tc_ratio",
+        "test_snr",
+        "control_snr",
+        "test_present",
+        "control_present"
     ])
 
     while True:
@@ -623,7 +627,11 @@ def main():
                 f"{elapsed:.2f}",
                 f"{t_strength:.3f}",
                 f"{c_strength:.3f}",
-                f"{tc_ratio:.3f}"
+                f"{tc_ratio:.3f}",
+                f"{t_snr:.3f}",
+                f"{c_snr:.3f}",
+                int(test_present),
+                int(control_present)
             ])
 
             # Draw detected Test line
@@ -677,6 +685,21 @@ def main():
                     cv.FONT_HERSHEY_SIMPLEX,
                     0.7,
                     (255,255,255),
+                    2
+                )
+
+                cv.putText(
+                    disp,
+                    (
+                        f"T SNR={t_snr:.1f}  "
+                        f"C SNR={c_snr:.1f}  "
+                        f"C={'YES' if control_present else 'NO'}  "
+                        f"T={'YES' if test_present else 'NO'}"
+                    ),
+                    (20, 110),
+                    cv.FONT_HERSHEY_SIMPLEX,
+                    0.65,
+                    (255, 255, 255),
                     2
                 )
 
