@@ -397,6 +397,44 @@ def band_strength(profile, idx, half_width=6):
 
     return float(peak - baseline)
 
+def band_signal_snr(profile, idx, half_width=6):
+    """
+    Return band strength and signal-to-noise ratio.
+    """
+    if idx is None:
+        return 0.0, 0.0
+
+    n = len(profile)
+
+    lo = max(0, idx - half_width)
+    hi = min(n, idx + half_width + 1)
+
+    peak = float(np.max(profile[lo:hi]))
+
+    # Exclude the candidate band from background estimation
+    mask = np.ones(n, dtype=bool)
+    mask[
+        max(0, idx - 3 * half_width):
+        min(n, idx + 3 * half_width + 1)
+    ] = False
+
+    background = profile[mask]
+
+    if background.size < 20:
+        background = profile
+
+    baseline = float(np.median(background))
+    strength = peak - baseline
+
+    # Robust noise estimate
+    noise = float(
+        np.median(np.abs(background - baseline)) + 1e-6
+    )
+
+    snr = strength / noise
+
+    return strength, snr
+
 def main():
     picam2 = Picamera2()
 
