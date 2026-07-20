@@ -642,6 +642,8 @@ def main():
                 f"{c_snr:.3f}",
                 int(test_present),
                 int(control_present)
+                int(stable_test),
+                int(stable_control)
             ])
 
             # Draw detected Test line
@@ -710,6 +712,26 @@ def main():
                     cv.FONT_HERSHEY_SIMPLEX,
                     0.65,
                     (255, 255, 255),
+                    2
+                )
+
+                cv.putText(
+                    disp,
+                    f"Stable Control: {'YES' if stable_control else 'NO'}",
+                    (20,140),
+                    cv.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (0,255,0),
+                    2
+                )
+
+                cv.putText(
+                    disp,
+                    f"Stable Test: {'YES' if stable_test else 'NO'}",
+                    (20,170),
+                    cv.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    (255,255,0),
                     2
                 )
 
