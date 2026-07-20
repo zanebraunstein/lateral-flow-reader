@@ -620,6 +620,12 @@ def main():
             control_present = c_snr >= 6.0
             test_present = t_snr >= 5.0 and control_present
 
+            recent_test.append(test_present)
+            recent_control.append(control_present)
+
+            stable_control = sum(recent_control) >= 7
+            stable_test = sum(recent_test) >= 7
+
             if c_strength > 1e-6:
                 tc_ratio = t_strength / c_strength
             else:
