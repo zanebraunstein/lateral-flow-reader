@@ -4,6 +4,7 @@ import time
 from picamera2 import Picamera2
 from libcamera import controls
 import csv
+from collections import deque
 
 
 # Canonical cassette geometry
@@ -472,6 +473,9 @@ def main():
         "test_present",
         "control_present"
     ])
+
+    recent_test = deque(maxlen=10)
+    recent_control = deque(maxlen=10)
 
     while True:
         frame_rgb = picam2.capture_array()
