@@ -5,6 +5,10 @@ Pure OpenCV/NumPy: no camera and no display, so this module can be imported
 and exercised on a workstation against recorded frames.
 """
 
+from collections import deque
+from dataclasses import dataclass
+from typing import List, Optional, Tuple
+
 import cv2 as cv
 import numpy as np
 
@@ -319,3 +323,105 @@ def band_signal_snr(profile, idx, half_width=6):
     snr = strength / noise
 
     return strength, snr
+
+
+@dataclass
+class BandReading:
+    """
+    One band (test or control) as measured in a single frame.
+    """
+    idx: Optional[int]
+    strength: float
+    snr: float
+    present: bool
+
+
+@dataclass
+class FrameResult:
+    """
+    Everything measured from one frame. Holds no image the renderer has
+    touched, so drawing can never feed back into the next measurement.
+    """
+    quad: np.ndarray
+    warped: np.ndarray
+    window_bounds: Tuple[int, int, int, int]
+    strip_rect: Tuple[int, int, int, int]
+    strip_roi: np.ndarray
+    profile: np.ndarray
+    candidates: List[int]
+    test: BandReading
+    control: BandReading
+    tc_ratio: float
+
+
+def analyze(frame):
+    """
+    Locate the cassette and measure the test and control bands.
+
+    Returns a FrameResult, or None if no cassette was found.
+    """
+    quad = find_cassette_quad(frame)
+
+    if quad is None:
+        return None
+
+    warped = warp_cassette(frame, quad)
+
+    x0, y0, x1, y1 = results_window_bounds()
+    results_window = warped[y0:y1, x0:x1]
+
+    # Copy: the result must stay valid even if the caller later draws on `warped`
+    strip_roi = extract_strip_roi(results_window).copy()
+
+    profile = redness_profile(strip_roi)
+    candidates = filter_band_candidates(profile)
+
+    t_idx, c_idx = pick_t_c_from_peaks(profile, candidates)
+
+    t_strength, t_snr = band_signal_snr(profile, t_idx)
+    c_strength, c_snr = band_signal_snr(profile, c_idx)
+
+    control_present = c_snr >= CONTROL_SNR_THRESHOLD
+    test_present = t_snr >= TEST_SNR_THRESHOLD and control_present
+
+    if c_strength > 1e-6:
+        tc_ratio = t_strength / c_strength
+    else:
+        tc_ratio = 0.0
+
+    return FrameResult(
+        quad=quad,
+        warped=warped,
+        window_bounds=(x0, y0, x1, y1),
+        strip_rect=strip_bounds(results_window),
+        strip_roi=strip_roi,
+        profile=profile,
+        candidates=candidates,
+        test=BandReading(t_idx, t_strength, t_snr, test_present),
+        control=BandReading(c_idx, c_strength, c_snr, control_present),
+        tc_ratio=tc_ratio
+    )
+
+
+class StabilityTracker:
+    """
+    A band counts as stable once it has been detected in STABILITY_VOTES of
+    the last STABILITY_WINDOW frames in which a cassette was visible.
+    """
+
+    def __init__(self, window=STABILITY_WINDOW, votes=STABILITY_VOTES):
+        self.votes = votes
+        self.recent_test = deque(maxlen=window)
+        self.recent_control = deque(maxlen=window)
+
+    def update(self, result):
+        self.recent_test.append(result.test.present)
+        self.recent_control.append(result.control.present)
+
+    @property
+    def stable_test(self):
+        return sum(self.recent_test) >= self.votes
+
+    @property
+    def stable_control(self):
+        return sum(self.recent_control) >= self.votes

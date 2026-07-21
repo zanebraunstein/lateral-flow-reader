@@ -18,6 +18,7 @@ COLOR_CONTROL = (0, 255, 0)
 COLOR_CANDIDATE = (0, 255, 255)
 COLOR_TEXT = (255, 255, 255)
 COLOR_SEARCHING = (0, 0, 255)
+COLOR_STRIP_ROI = (255, 0, 255)
 
 
 def draw_band_line_on_main(
@@ -229,3 +230,78 @@ def draw_readout(
         COLOR_TEST,
         2
     )
+
+
+def render(frame, result, stable_test=False, stable_control=False):
+    """
+    Build every display image for one frame.
+
+    Returns an ordered {window name: image} mapping; the caller decides
+    whether to show them. Nothing here mutates `frame` or `result`, so a
+    headless run can simply skip the call.
+    """
+    disp = frame.copy()
+
+    if result is None:
+        draw_searching(disp)
+        return {"Lateral Flow Reader": disp}
+
+    draw_cassette_found(disp, result.quad)
+
+    x0, y0, x1, y1 = result.window_bounds
+    sx0, sy0, sx1, sy1 = result.strip_rect
+
+    for band, label, color in (
+        (result.control, "C", COLOR_CONTROL),
+        (result.test, "T", COLOR_TEST)
+    ):
+        if band.idx is not None:
+            draw_band_line_on_main(
+                disp,
+                result.quad,
+                x0 + sx0 + band.idx,
+                y0,
+                y1,
+                label,
+                color
+            )
+
+    draw_readout(
+        disp,
+        result.test.strength,
+        result.control.strength,
+        result.tc_ratio,
+        result.test.snr,
+        result.control.snr,
+        result.test.present,
+        result.control.present,
+        stable_test,
+        stable_control
+    )
+
+    # Copy before drawing: `result.warped` is the measured image
+    warped = result.warped.copy()
+
+    cv.rectangle(warped, (x0, y0), (x1, y1), COLOR_CONTROL, 2)
+
+    results_window = warped[y0:y1, x0:x1]
+
+    cv.rectangle(results_window, (sx0, sy0), (sx1, sy1), COLOR_STRIP_ROI, 2)
+
+    profile_vis = draw_profile(result.profile)
+
+    mark_bands_on_profile(
+        profile_vis,
+        result.profile,
+        result.test.idx,
+        result.control.idx,
+        result.candidates
+    )
+
+    return {
+        "Results Window": results_window,
+        "Strip ROI": result.strip_roi,
+        "Signal Profile": profile_vis,
+        "Warped Cassette": warped,
+        "Lateral Flow Reader": disp
+    }
