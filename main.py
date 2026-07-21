@@ -471,232 +471,239 @@ def main():
         "test_snr",
         "control_snr",
         "test_present",
-        "control_present"
+        "control_present",
+        "stable_test",
+        "stable_control"
     ])
 
     recent_test = deque(maxlen=10)
     recent_control = deque(maxlen=10)
 
-    while True:
-        frame_rgb = picam2.capture_array()
+    try:
+        while True:
+            frame_rgb = picam2.capture_array()
 
-        frame = cv.cvtColor(
-            frame_rgb,
-            cv.COLOR_RGB2BGR
-        )
-
-        disp = frame.copy()
-        warped = None
-
-        quad = find_cassette_quad(frame)
-
-        if quad is not None:
-            warped = warp_cassette(frame, quad)
-
-            cv.polylines(
-                disp,
-                [quad.astype(np.int32)],
-                True,
-                (0, 255, 0),
-                3
+            frame = cv.cvtColor(
+                frame_rgb,
+                cv.COLOR_RGB2BGR
             )
 
-            cv.putText(
-                disp,
-                "Cassette detected",
-                (20, 40),
-                cv.FONT_HERSHEY_SIMPLEX,
-                1.0,
-                (0, 255, 0),
-                2
-            )
+            disp = frame.copy()
+            warped = None
 
-            # Results window ROI
-            x0 = int(WINDOW_X0 * CANON_W)
-            y0 = int(WINDOW_Y0 * CANON_H)
-            x1 = int(WINDOW_X1 * CANON_W)
-            y1 = int(WINDOW_Y1 * CANON_H)
+            quad = find_cassette_quad(frame)
 
-            cv.rectangle(
-                warped,
-                (x0, y0),
-                (x1, y1),
-                (0, 255, 0),
-                2
-            )
+            if quad is not None:
+                warped = warp_cassette(frame, quad)
 
-            results_window = warped[y0:y1, x0:x1]
-
-            rh, rw = results_window.shape[:2]
-
-            sx0 = int(STRIP_X0_FRAC * rw)
-            sx1 = int(STRIP_X1_FRAC * rw)
-
-            sy0 = int(STRIP_Y0_FRAC * rh)
-            sy1 = int(STRIP_Y1_FRAC * rh)
-
-            cv.rectangle(
-                results_window,
-                (sx0, sy0),
-                (sx1, sy1),
-                (255, 0, 255),
-                2
-            )
-
-            strip_roi = extract_strip_roi(results_window)
-
-            profile = redness_profile(strip_roi)
-
-            profile_vis = draw_profile(profile)
-
-            candidates = filter_band_candidates(profile)
-
-            t_idx, c_idx = pick_t_c_from_peaks(profile)
-
-            if c_idx is not None:
-                canon_x = x0 + sx0 + c_idx
-
-                draw_band_line_on_main(
+                cv.polylines(
                     disp,
-                    quad,
-                    canon_x,
-                    y0,
-                    y1,
-                    "C",
-                    (0,255,255)
+                    [quad.astype(np.int32)],
+                    True,
+                    (0, 255, 0),
+                    3
                 )
 
-            if t_idx is not None:
-                canon_x = x0 + sx0 + t_idx
-
-                draw_band_line_on_main(
+                cv.putText(
                     disp,
-                    quad,
-                    canon_x,
-                    y0,
-                    y1,
-                    "T",
-                    (255,255,0)
+                    "Cassette detected",
+                    (20, 40),
+                    cv.FONT_HERSHEY_SIMPLEX,
+                    1.0,
+                    (0, 255, 0),
+                    2
                 )
 
-            strip_x0 = int(STRIP_X0_FRAC * results_window.shape[1])
+                # Results window ROI
+                x0 = int(WINDOW_X0 * CANON_W)
+                y0 = int(WINDOW_Y0 * CANON_H)
+                x1 = int(WINDOW_X1 * CANON_W)
+                y1 = int(WINDOW_Y1 * CANON_H)
 
-            if c_idx is not None:
-                canon_x = x0 + strip_x0 + c_idx
-
-                draw_band_line_on_main(
-                    disp,
-                    quad,
-                    canon_x,
-                    y0,
-                    y1,
-                    "C",
-                    (0,255,0)
+                cv.rectangle(
+                    warped,
+                    (x0, y0),
+                    (x1, y1),
+                    (0, 255, 0),
+                    2
                 )
 
-            if t_idx is not None:
-                canon_x = x0 + strip_x0 + t_idx
+                results_window = warped[y0:y1, x0:x1]
 
-                draw_band_line_on_main(
-                    disp,
-                    quad,
-                    canon_x,
-                    y0,
-                    y1,
-                    "T",
-                    (255,255,0)
+                rh, rw = results_window.shape[:2]
+
+                sx0 = int(STRIP_X0_FRAC * rw)
+                sx1 = int(STRIP_X1_FRAC * rw)
+
+                sy0 = int(STRIP_Y0_FRAC * rh)
+                sy1 = int(STRIP_Y1_FRAC * rh)
+
+                cv.rectangle(
+                    results_window,
+                    (sx0, sy0),
+                    (sx1, sy1),
+                    (255, 0, 255),
+                    2
                 )
 
-            t_strength, t_snr = band_signal_snr(
-                profile,
-                t_idx
-            )
+                strip_roi = extract_strip_roi(results_window)
 
-            c_strength, c_snr = band_signal_snr(
-                profile,
-                c_idx
-            )
+                profile = redness_profile(strip_roi)
 
-            control_present = c_snr >= 6.0
-            test_present = t_snr >= 5.0 and control_present
+                profile_vis = draw_profile(profile)
 
-            recent_test.append(test_present)
-            recent_control.append(control_present)
+                candidates = filter_band_candidates(profile)
 
-            stable_control = sum(recent_control) >= 7
-            stable_test = sum(recent_test) >= 7
+                t_idx, c_idx = pick_t_c_from_peaks(profile)
 
-            if c_strength > 1e-6:
-                tc_ratio = t_strength / c_strength
-            else:
-                tc_ratio = 0.0
+                if c_idx is not None:
+                    canon_x = x0 + sx0 + c_idx
+
+                    draw_band_line_on_main(
+                        disp,
+                        quad,
+                        canon_x,
+                        y0,
+                        y1,
+                        "C",
+                        (0,255,255)
+                    )
+
+                if t_idx is not None:
+                    canon_x = x0 + sx0 + t_idx
+
+                    draw_band_line_on_main(
+                        disp,
+                        quad,
+                        canon_x,
+                        y0,
+                        y1,
+                        "T",
+                        (255,255,0)
+                    )
+
+                strip_x0 = int(STRIP_X0_FRAC * results_window.shape[1])
+
+                if c_idx is not None:
+                    canon_x = x0 + strip_x0 + c_idx
+
+                    draw_band_line_on_main(
+                        disp,
+                        quad,
+                        canon_x,
+                        y0,
+                        y1,
+                        "C",
+                        (0,255,0)
+                    )
+
+                if t_idx is not None:
+                    canon_x = x0 + strip_x0 + t_idx
+
+                    draw_band_line_on_main(
+                        disp,
+                        quad,
+                        canon_x,
+                        y0,
+                        y1,
+                        "T",
+                        (255,255,0)
+                    )
+
+                t_strength, t_snr = band_signal_snr(
+                    profile,
+                    t_idx
+                )
+
+                c_strength, c_snr = band_signal_snr(
+                    profile,
+                    c_idx
+                )
+
+                control_present = c_snr >= 6.0
+                test_present = t_snr >= 5.0 and control_present
+
+                recent_test.append(test_present)
+                recent_control.append(control_present)
+
+                stable_control = sum(recent_control) >= 7
+                stable_test = sum(recent_test) >= 7
+
+                if c_strength > 1e-6:
+                    tc_ratio = t_strength / c_strength
+                else:
+                    tc_ratio = 0.0
             
-            elapsed = time.time() - start_time
+                elapsed = time.time() - start_time
 
-            writer.writerow([
-                f"{elapsed:.2f}",
-                f"{t_strength:.3f}",
-                f"{c_strength:.3f}",
-                f"{tc_ratio:.3f}",
-                f"{t_snr:.3f}",
-                f"{c_snr:.3f}",
-                int(test_present),
-                int(control_present)
-                int(stable_test),
-                int(stable_control)
-            ])
+                writer.writerow([
+                    f"{elapsed:.2f}",
+                    f"{t_strength:.3f}",
+                    f"{c_strength:.3f}",
+                    f"{tc_ratio:.3f}",
+                    f"{t_snr:.3f}",
+                    f"{c_snr:.3f}",
+                    int(test_present),
+                    int(control_present),
+                    int(stable_test),
+                    int(stable_control)
+                ])
 
-            # Draw detected Test line
-            if t_idx is not None:
-                x = int(t_idx / len(profile) * profile_vis.shape[1])
+                # A run lasts minutes; never lose it to an unclean exit
+                csv_file.flush()
 
-                cv.line(
-                    profile_vis,
-                    (x, 0),
-                    (x, profile_vis.shape[0]),
-                    (255, 255, 0),
-                    2
-                )
+                # Draw detected Test line
+                if t_idx is not None:
+                    x = int(t_idx / len(profile) * profile_vis.shape[1])
 
-                cv.putText(
-                    profile_vis,
-                    "T",
-                    (x + 4, 20),
-                    cv.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (255, 255, 0),
-                    2
-                )
+                    cv.line(
+                        profile_vis,
+                        (x, 0),
+                        (x, profile_vis.shape[0]),
+                        (255, 255, 0),
+                        2
+                    )
 
-            # Draw detected Control line
-            if c_idx is not None:
-                x = int(c_idx / len(profile) * profile_vis.shape[1])
+                    cv.putText(
+                        profile_vis,
+                        "T",
+                        (x + 4, 20),
+                        cv.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (255, 255, 0),
+                        2
+                    )
 
-                cv.line(
-                    profile_vis,
-                    (x, 0),
-                    (x, profile_vis.shape[0]),
-                    (0, 255, 0),
-                    2
-                )
+                # Draw detected Control line
+                if c_idx is not None:
+                    x = int(c_idx / len(profile) * profile_vis.shape[1])
 
-                cv.putText(
-                    profile_vis,
-                    "C",
-                    (x + 4, 45),
-                    cv.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 255, 0),
-                    2
-                )
+                    cv.line(
+                        profile_vis,
+                        (x, 0),
+                        (x, profile_vis.shape[0]),
+                        (0, 255, 0),
+                        2
+                    )
 
+                    cv.putText(
+                        profile_vis,
+                        "C",
+                        (x + 4, 45),
+                        cv.FONT_HERSHEY_SIMPLEX,
+                        0.6,
+                        (0, 255, 0),
+                        2
+                    )
+
+                # Readout is drawn every frame, not only when a control line is found
                 cv.putText(
                     disp,
                     f"T={t_strength:.2f}  C={c_strength:.2f}  T/C={tc_ratio:.2f}",
                     (20, 80),
                     cv.FONT_HERSHEY_SIMPLEX,
                     0.7,
-                    (255,255,255),
+                    (255, 255, 255),
                     2
                 )
 
@@ -718,78 +725,79 @@ def main():
                 cv.putText(
                     disp,
                     f"Stable Control: {'YES' if stable_control else 'NO'}",
-                    (20,140),
+                    (20, 140),
                     cv.FONT_HERSHEY_SIMPLEX,
                     0.6,
-                    (0,255,0),
+                    (0, 255, 0),
                     2
                 )
 
                 cv.putText(
                     disp,
                     f"Stable Test: {'YES' if stable_test else 'NO'}",
-                    (20,170),
+                    (20, 170),
                     cv.FONT_HERSHEY_SIMPLEX,
                     0.6,
-                    (255,255,0),
+                    (255, 255, 0),
                     2
                 )
 
-            for idx in candidates[:5]:
-                x = int(idx / len(profile) * profile_vis.shape[1])
+                for idx in candidates[:5]:
+                    x = int(idx / len(profile) * profile_vis.shape[1])
 
-                cv.line(
-                    profile_vis,
-                    (x, 0),
-                    (x, profile_vis.shape[0]),
-                    (0, 255, 255),
-                    1
+                    cv.line(
+                        profile_vis,
+                        (x, 0),
+                        (x, profile_vis.shape[0]),
+                        (0, 255, 255),
+                        1
+                    )
+
+                cv.imshow(
+                    "Results Window",
+                    results_window
+                )
+
+                cv.imshow(
+                    "Strip ROI",
+                    strip_roi
+                )
+
+                cv.imshow(
+                    "Signal Profile",
+                    profile_vis
+                )
+
+
+            else:
+                cv.putText(
+                    disp,
+                    "Searching...",
+                    (20, 40),
+                    cv.FONT_HERSHEY_SIMPLEX,
+                    1.0,
+                    (0, 0, 255),
+                    2
+                )
+
+            if warped is not None:
+                cv.imshow(
+                    "Warped Cassette",
+                    warped
                 )
 
             cv.imshow(
-                "Results Window",
-                results_window
+                "Lateral Flow Reader",
+                disp
             )
 
-            cv.imshow(
-                "Strip ROI",
-                strip_roi
-            )
+            if cv.waitKey(1) & 0xFF == ord("q"):
+                break
 
-            cv.imshow(
-                "Signal Profile",
-                profile_vis
-            )
-
-
-        else:
-            cv.putText(
-                disp,
-                "Searching...",
-                (20, 40),
-                cv.FONT_HERSHEY_SIMPLEX,
-                1.0,
-                (0, 0, 255),
-                2
-            )
-
-        if warped is not None:
-            cv.imshow(
-                "Warped Cassette",
-                warped
-            )
-
-        cv.imshow(
-            "Lateral Flow Reader",
-            disp
-        )
-
-        if cv.waitKey(1) & 0xFF == ord("q"):
-            break
-
-    csv_file.close()
-    cv.destroyAllWindows()
-    picam2.stop()
+    finally:
+        csv_file.close()
+        cv.destroyAllWindows()
+        picam2.stop()
 
 
 if __name__ == "__main__":
