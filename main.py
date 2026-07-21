@@ -1,367 +1,32 @@
-import cv2 as cv
-import numpy as np
-import time
-from picamera2 import Picamera2
-from libcamera import controls
 import csv
+import time
 from collections import deque
 
-
-# Canonical cassette geometry
-CANON_W = 900
-CANON_H = 320
-
-# Results window ROI in canonical warped cassette view
-WINDOW_X0 = 0.55
-WINDOW_Y0 = 0.22
-WINDOW_X1 = 0.93
-WINDOW_Y1 = 0.78
-
-STRIP_Y0_FRAC = 0.44
-STRIP_Y1_FRAC = 0.66
-
-STRIP_X0_FRAC = 0.30
-STRIP_X1_FRAC = 0.82
-
-EDGE_EXCLUDE_FRAC = 0.12
-MIN_BAND_WIDTH = 6
-MAX_BAND_WIDTH = 45
-
-EXPECTED_C_FRAC = 0.80
-EXPECTED_T_FRAC = 0.45
-SEARCH_RADIUS_FRAC = 0.18
-MIN_TC_SEPARATION_FRAC = 0.18
-
-
-def order_points(pts):
-    pts = pts.astype(np.float32)
-
-    s = pts.sum(axis=1)
-    diff = np.diff(pts, axis=1).reshape(-1)
-
-    tl = pts[np.argmin(s)]
-    br = pts[np.argmax(s)]
-    tr = pts[np.argmin(diff)]
-    bl = pts[np.argmax(diff)]
-
-    return np.array([tl, tr, br, bl], dtype=np.float32)
-
-
-def find_cassette_quad(frame):
-    gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-    gray = cv.GaussianBlur(gray, (7, 7), 0)
-
-    edges = cv.Canny(gray, 50, 150)
-
-    kernel = cv.getStructuringElement(cv.MORPH_RECT, (7, 7))
-    edges = cv.morphologyEx(edges, cv.MORPH_CLOSE, kernel, iterations=2)
-
-    contours, _ = cv.findContours(
-        edges,
-        cv.RETR_EXTERNAL,
-        cv.CHAIN_APPROX_SIMPLE
-    )
-
-    contours = sorted(contours, key=cv.contourArea, reverse=True)
-
-    h, w = frame.shape[:2]
-    min_area = 0.03 * (h * w)
-
-    for cnt in contours:
-        area = cv.contourArea(cnt)
-
-        if area < min_area:
-            continue
-
-        peri = cv.arcLength(cnt, True)
-
-        approx = cv.approxPolyDP(
-            cnt,
-            0.02 * peri,
-            True
-        )
-
-        if len(approx) == 4 and cv.isContourConvex(approx):
-            return order_points(
-                approx.reshape(4, 2)
-            )
-
-    return None
-
-
-def warp_cassette(frame, quad):
-    dst = np.array([
-        [0, 0],
-        [CANON_W - 1, 0],
-        [CANON_W - 1, CANON_H - 1],
-        [0, CANON_H - 1]
-    ], dtype=np.float32)
-
-    M = cv.getPerspectiveTransform(
-        quad.astype(np.float32),
-        dst
-    )
-
-    return cv.warpPerspective(
-        frame,
-        M,
-        (CANON_W, CANON_H)
-    )
-
-def draw_band_line_on_main(
-    frame,
-    quad,
-    canon_x,
-    y0,
-    y1,
-    label,
-    color
-):
-    dst = np.array([
-        [0, 0],
-        [CANON_W - 1, 0],
-        [CANON_W - 1, CANON_H - 1],
-        [0, CANON_H - 1]
-    ], dtype=np.float32)
-
-    Minv = cv.getPerspectiveTransform(
-        dst,
-        quad.astype(np.float32)
-    )
-
-    pts = np.array([
-        [[canon_x, y0]],
-        [[canon_x, y1]]
-    ], dtype=np.float32)
-
-    pts = cv.perspectiveTransform(
-        pts,
-        Minv
-    ).reshape(-1, 2)
-
-    p0 = tuple(np.round(pts[0]).astype(int))
-    p1 = tuple(np.round(pts[1]).astype(int))
-
-    cv.line(frame, p0, p1, color, 2)
-
-    cv.putText(
-        frame,
-        label,
-        (p0[0] + 5, p0[1] - 5),
-        cv.FONT_HERSHEY_SIMPLEX,
-        0.7,
-        color,
-        2
-    )
-
-def extract_strip_roi(results_window):
-    h, w = results_window.shape[:2]
-
-    y0 = int(STRIP_Y0_FRAC * h)
-    y1 = int(STRIP_Y1_FRAC * h)
-
-    x0 = int(STRIP_X0_FRAC * w)
-    x1 = int(STRIP_X1_FRAC * w)
-
-    return results_window[y0:y1, x0:x1]
-
-def redness_profile(strip_bgr):
-    lab = cv.cvtColor(strip_bgr, cv.COLOR_BGR2LAB)
-
-    a = lab[:, :, 1].astype(np.float32)
-
-    # Collapse vertically into 1D profile
-    background = cv.GaussianBlur(
-        a,
-        (0, 0),
-        sigmaX=25,
-        sigmaY=25
-    )
-
-    normalized = a - background
-
-    profile = np.median(
-        normalized,
-        axis=0
-    )
-
-    # Smooth profile
-    kernel = np.ones(15, dtype=np.float32)
-    kernel /= kernel.sum()
-    profile = np.convolve(profile, kernel, mode="same")
-
-    profile -= np.median(profile)
-
-    mad = np.median(np.abs(profile)) + 1e-6
-    profile /= mad
-
-    return profile
-
-def draw_profile(profile, width=600, height=200):
-    canvas = np.zeros((height, width, 3), dtype=np.uint8)
-
-    p = profile.astype(np.float32)
-
-    p -= np.min(p)
-
-    if np.max(p) > 1e-6:
-        p /= np.max(p)
-
-    xs = np.linspace(
-        0,
-        width - 1,
-        len(p)
-    ).astype(np.int32)
-
-    ys = (
-        height - 1
-        - p * (height - 1)
-    ).astype(np.int32)
-
-    pts = np.stack([xs, ys], axis=1)
-
-    cv.polylines(
-        canvas,
-        [pts],
-        False,
-        (255, 255, 255),
-        2
-    )
-
-    return canvas
-
-def find_peak_candidates(profile):
-    n = len(profile)
-
-    if n < 50:
-        return []
-
-    pad = int(EDGE_EXCLUDE_FRAC * n)
-
-    candidates = []
-
-    for i in range(2, n - 2):
-        if i < pad or i > (n - 1 - pad):
-            continue
-
-        if profile[i] >= profile[i - 1] and profile[i] >= profile[i + 1]:
-            candidates.append(i)
-
-    candidates.sort(key=lambda i: profile[i], reverse=True)
-
-    return candidates
-
-def band_width_peak(profile, idx, frac=0.5):
-    peak = float(profile[idx])
-    base = float(np.median(profile))
-    level = base + frac * (peak - base)
-
-    left = idx
-    while left > 0 and profile[left] > level:
-        left -= 1
-
-    right = idx
-    while right < len(profile) - 1 and profile[right] > level:
-        right += 1
-
-    return right - left
-
-def filter_band_candidates(profile):
-    peaks = find_peak_candidates(profile)
-
-    valid = []
-
-    for idx in peaks:
-        width = band_width_peak(profile, idx)
-
-        if MIN_BAND_WIDTH <= width <= MAX_BAND_WIDTH:
-            valid.append(idx)
-
-    return valid
-
-def pick_peak_near(profile, candidates, expected_frac, radius_frac):
-    n = len(profile)
-
-    expected = int(expected_frac * n)
-    radius = int(radius_frac * n)
-
-    lo = max(0, expected - radius)
-    hi = min(n - 1, expected + radius)
-
-    best = None
-    best_score = -1e9
-
-    for idx in candidates:
-        if idx < lo or idx > hi:
-            continue
-
-        distance_penalty = abs(idx - expected) / (radius + 1e-6)
-        score = float(profile[idx]) - 0.35 * distance_penalty
-
-        if score > best_score:
-            best_score = score
-            best = idx
-
-    return best
-
-def pick_t_c_from_peaks(profile, candidates):
-    t_idx = pick_peak_near(profile, candidates, EXPECTED_T_FRAC, SEARCH_RADIUS_FRAC)
-    c_idx = pick_peak_near(profile, candidates, EXPECTED_C_FRAC, SEARCH_RADIUS_FRAC)
-
-    if t_idx is not None and c_idx is not None:
-        min_sep = int(MIN_TC_SEPARATION_FRAC * len(profile))
-
-        if abs(t_idx - c_idx) < min_sep:
-            if profile[c_idx] >= profile[t_idx]:
-                t_idx = None
-            else:
-                c_idx = t_idx
-                t_idx = None
-
-    if c_idx is None and t_idx is not None:
-        c_idx, t_idx = t_idx, None
-
-    return t_idx, c_idx
-
-def band_signal_snr(profile, idx, half_width=6):
-    """
-    Return band strength and signal-to-noise ratio.
-    """
-    if idx is None:
-        return 0.0, 0.0
-
-    n = len(profile)
-
-    lo = max(0, idx - half_width)
-    hi = min(n, idx + half_width + 1)
-
-    peak = float(np.max(profile[lo:hi]))
-
-    # Exclude the candidate band from background estimation
-    mask = np.ones(n, dtype=bool)
-    mask[
-        max(0, idx - 3 * half_width):
-        min(n, idx + 3 * half_width + 1)
-    ] = False
-
-    background = profile[mask]
-
-    if background.size < 20:
-        background = profile
-
-    baseline = float(np.median(background))
-    strength = peak - baseline
-
-    # Robust noise estimate
-    noise = float(
-        np.median(np.abs(background - baseline)) + 1e-6
-    )
-
-    snr = strength / noise
-
-    return strength, snr
-
-def main():
+import cv2 as cv
+from picamera2 import Picamera2
+from libcamera import controls
+
+import strip
+import viz
+
+
+CSV_PATH = "signal_log.csv"
+
+CSV_HEADER = [
+    "time_seconds",
+    "test_strength",
+    "control_strength",
+    "tc_ratio",
+    "test_snr",
+    "control_snr",
+    "test_present",
+    "control_present",
+    "stable_test",
+    "stable_control"
+]
+
+
+def start_camera():
     picam2 = Picamera2()
 
     config = picam2.create_video_configuration(
@@ -383,26 +48,20 @@ def main():
     except Exception as e:
         print("Autofocus unavailable:", e)
 
+    return picam2
+
+
+def main():
+    picam2 = start_camera()
+
     start_time = time.time()
 
-    csv_file = open("signal_log.csv", "w", newline="")
+    csv_file = open(CSV_PATH, "w", newline="")
     writer = csv.writer(csv_file)
+    writer.writerow(CSV_HEADER)
 
-    writer.writerow([
-        "time_seconds",
-        "test_strength",
-        "control_strength",
-        "tc_ratio",
-        "test_snr",
-        "control_snr",
-        "test_present",
-        "control_present",
-        "stable_test",
-        "stable_control"
-    ])
-
-    recent_test = deque(maxlen=10)
-    recent_control = deque(maxlen=10)
+    recent_test = deque(maxlen=strip.STABILITY_WINDOW)
+    recent_control = deque(maxlen=strip.STABILITY_WINDOW)
 
     try:
         while True:
@@ -416,52 +75,30 @@ def main():
             disp = frame.copy()
             warped = None
 
-            quad = find_cassette_quad(frame)
+            quad = strip.find_cassette_quad(frame)
 
             if quad is not None:
-                warped = warp_cassette(frame, quad)
+                warped = strip.warp_cassette(frame, quad)
 
-                cv.polylines(
-                    disp,
-                    [quad.astype(np.int32)],
-                    True,
-                    (0, 255, 0),
-                    3
-                )
+                viz.draw_cassette_found(disp, quad)
 
-                cv.putText(
-                    disp,
-                    "Cassette detected",
-                    (20, 40),
-                    cv.FONT_HERSHEY_SIMPLEX,
-                    1.0,
-                    (0, 255, 0),
-                    2
-                )
+                x0, y0, x1, y1 = strip.results_window_bounds()
 
-                # Results window ROI
-                x0 = int(WINDOW_X0 * CANON_W)
-                y0 = int(WINDOW_Y0 * CANON_H)
-                x1 = int(WINDOW_X1 * CANON_W)
-                y1 = int(WINDOW_Y1 * CANON_H)
-
+                # NOTE: these ROI rectangles are drawn into `warped` before the
+                # strip is sliced out of it, so the overlay lands in the pixels
+                # that get measured. Left as-is here; fixed when analysis and
+                # rendering are separated.
                 cv.rectangle(
                     warped,
                     (x0, y0),
                     (x1, y1),
-                    (0, 255, 0),
+                    viz.COLOR_CONTROL,
                     2
                 )
 
                 results_window = warped[y0:y1, x0:x1]
 
-                rh, rw = results_window.shape[:2]
-
-                sx0 = int(STRIP_X0_FRAC * rw)
-                sx1 = int(STRIP_X1_FRAC * rw)
-
-                sy0 = int(STRIP_Y0_FRAC * rh)
-                sy1 = int(STRIP_Y1_FRAC * rh)
+                sx0, sy0, sx1, sy1 = strip.strip_bounds(results_window)
 
                 cv.rectangle(
                     results_window,
@@ -471,66 +108,56 @@ def main():
                     2
                 )
 
-                strip_roi = extract_strip_roi(results_window)
+                strip_roi = strip.extract_strip_roi(results_window)
 
-                profile = redness_profile(strip_roi)
+                profile = strip.redness_profile(strip_roi)
 
-                profile_vis = draw_profile(profile)
+                candidates = strip.filter_band_candidates(profile)
 
-                candidates = filter_band_candidates(profile)
-
-                t_idx, c_idx = pick_t_c_from_peaks(profile, candidates)
+                t_idx, c_idx = strip.pick_t_c_from_peaks(profile, candidates)
 
                 if c_idx is not None:
-                    canon_x = x0 + sx0 + c_idx
-
-                    draw_band_line_on_main(
+                    viz.draw_band_line_on_main(
                         disp,
                         quad,
-                        canon_x,
+                        x0 + sx0 + c_idx,
                         y0,
                         y1,
                         "C",
-                        (0, 255, 0)
+                        viz.COLOR_CONTROL
                     )
 
                 if t_idx is not None:
-                    canon_x = x0 + sx0 + t_idx
-
-                    draw_band_line_on_main(
+                    viz.draw_band_line_on_main(
                         disp,
                         quad,
-                        canon_x,
+                        x0 + sx0 + t_idx,
                         y0,
                         y1,
                         "T",
-                        (255, 255, 0)
+                        viz.COLOR_TEST
                     )
 
-                t_strength, t_snr = band_signal_snr(
-                    profile,
-                    t_idx
-                )
+                t_strength, t_snr = strip.band_signal_snr(profile, t_idx)
+                c_strength, c_snr = strip.band_signal_snr(profile, c_idx)
 
-                c_strength, c_snr = band_signal_snr(
-                    profile,
-                    c_idx
+                control_present = c_snr >= strip.CONTROL_SNR_THRESHOLD
+                test_present = (
+                    t_snr >= strip.TEST_SNR_THRESHOLD
+                    and control_present
                 )
-
-                control_present = c_snr >= 6.0
-                test_present = t_snr >= 5.0 and control_present
 
                 recent_test.append(test_present)
                 recent_control.append(control_present)
 
-                stable_control = sum(recent_control) >= 7
-                stable_test = sum(recent_test) >= 7
+                stable_control = sum(recent_control) >= strip.STABILITY_VOTES
+                stable_test = sum(recent_test) >= strip.STABILITY_VOTES
 
                 if c_strength > 1e-6:
                     tc_ratio = t_strength / c_strength
                 else:
                     tc_ratio = 0.0
-            
+
                 elapsed = time.time() - start_time
 
                 writer.writerow([
@@ -549,144 +176,40 @@ def main():
                 # A run lasts minutes; never lose it to an unclean exit
                 csv_file.flush()
 
-                # Draw detected Test line
-                if t_idx is not None:
-                    x = int(t_idx / len(profile) * profile_vis.shape[1])
+                profile_vis = viz.draw_profile(profile)
 
-                    cv.line(
-                        profile_vis,
-                        (x, 0),
-                        (x, profile_vis.shape[0]),
-                        (255, 255, 0),
-                        2
-                    )
+                viz.mark_bands_on_profile(
+                    profile_vis,
+                    profile,
+                    t_idx,
+                    c_idx,
+                    candidates
+                )
 
-                    cv.putText(
-                        profile_vis,
-                        "T",
-                        (x + 4, 20),
-                        cv.FONT_HERSHEY_SIMPLEX,
-                        0.6,
-                        (255, 255, 0),
-                        2
-                    )
-
-                # Draw detected Control line
-                if c_idx is not None:
-                    x = int(c_idx / len(profile) * profile_vis.shape[1])
-
-                    cv.line(
-                        profile_vis,
-                        (x, 0),
-                        (x, profile_vis.shape[0]),
-                        (0, 255, 0),
-                        2
-                    )
-
-                    cv.putText(
-                        profile_vis,
-                        "C",
-                        (x + 4, 45),
-                        cv.FONT_HERSHEY_SIMPLEX,
-                        0.6,
-                        (0, 255, 0),
-                        2
-                    )
-
-                # Readout is drawn every frame, not only when a control line is found
-                cv.putText(
+                viz.draw_readout(
                     disp,
-                    f"T={t_strength:.2f}  C={c_strength:.2f}  T/C={tc_ratio:.2f}",
-                    (20, 80),
-                    cv.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (255, 255, 255),
-                    2
+                    t_strength,
+                    c_strength,
+                    tc_ratio,
+                    t_snr,
+                    c_snr,
+                    test_present,
+                    control_present,
+                    stable_test,
+                    stable_control
                 )
 
-                cv.putText(
-                    disp,
-                    (
-                        f"T SNR={t_snr:.1f}  "
-                        f"C SNR={c_snr:.1f}  "
-                        f"C={'YES' if control_present else 'NO'}  "
-                        f"T={'YES' if test_present else 'NO'}"
-                    ),
-                    (20, 110),
-                    cv.FONT_HERSHEY_SIMPLEX,
-                    0.65,
-                    (255, 255, 255),
-                    2
-                )
-
-                cv.putText(
-                    disp,
-                    f"Stable Control: {'YES' if stable_control else 'NO'}",
-                    (20, 140),
-                    cv.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (0, 255, 0),
-                    2
-                )
-
-                cv.putText(
-                    disp,
-                    f"Stable Test: {'YES' if stable_test else 'NO'}",
-                    (20, 170),
-                    cv.FONT_HERSHEY_SIMPLEX,
-                    0.6,
-                    (255, 255, 0),
-                    2
-                )
-
-                for idx in candidates[:5]:
-                    x = int(idx / len(profile) * profile_vis.shape[1])
-
-                    cv.line(
-                        profile_vis,
-                        (x, 0),
-                        (x, profile_vis.shape[0]),
-                        (0, 255, 255),
-                        1
-                    )
-
-                cv.imshow(
-                    "Results Window",
-                    results_window
-                )
-
-                cv.imshow(
-                    "Strip ROI",
-                    strip_roi
-                )
-
-                cv.imshow(
-                    "Signal Profile",
-                    profile_vis
-                )
-
+                cv.imshow("Results Window", results_window)
+                cv.imshow("Strip ROI", strip_roi)
+                cv.imshow("Signal Profile", profile_vis)
 
             else:
-                cv.putText(
-                    disp,
-                    "Searching...",
-                    (20, 40),
-                    cv.FONT_HERSHEY_SIMPLEX,
-                    1.0,
-                    (0, 0, 255),
-                    2
-                )
+                viz.draw_searching(disp)
 
             if warped is not None:
-                cv.imshow(
-                    "Warped Cassette",
-                    warped
-                )
+                cv.imshow("Warped Cassette", warped)
 
-            cv.imshow(
-                "Lateral Flow Reader",
-                disp
-            )
+            cv.imshow("Lateral Flow Reader", disp)
 
             if cv.waitKey(1) & 0xFF == ord("q"):
                 break
