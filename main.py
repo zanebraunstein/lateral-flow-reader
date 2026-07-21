@@ -109,58 +109,6 @@ def warp_cassette(frame, quad):
     )
 
 def draw_band_line_on_main(
-    disp,
-    quad,
-    canon_x,
-    y0,
-    y1,
-    label,
-    color
-):
-    dst = np.array([
-        [0, 0],
-        [CANON_W-1, 0],
-        [CANON_W-1, CANON_H-1],
-        [0, CANON_H-1]
-    ], dtype=np.float32)
-
-    Minv = cv.getPerspectiveTransform(
-        dst,
-        quad.astype(np.float32)
-    )
-
-    pts = np.array([
-        [[canon_x, y0]],
-        [[canon_x, y1]]
-    ], dtype=np.float32)
-
-    pts = cv.perspectiveTransform(
-        pts,
-        Minv
-    ).reshape(-1,2)
-
-    p0 = tuple(np.round(pts[0]).astype(int))
-    p1 = tuple(np.round(pts[1]).astype(int))
-
-    cv.line(
-        disp,
-        p0,
-        p1,
-        color,
-        2
-    )
-
-    cv.putText(
-        disp,
-        label,
-        (p0[0]+5,p0[1]-5),
-        cv.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        color,
-        2
-    )
-
-def draw_band_line_on_main(
     frame,
     quad,
     canon_x,
@@ -331,7 +279,7 @@ def filter_band_candidates(profile):
 
     return valid
 
-def pick_peak_near(profile, expected_frac, radius_frac):
+def pick_peak_near(profile, candidates, expected_frac, radius_frac):
     n = len(profile)
 
     expected = int(expected_frac * n)
@@ -339,8 +287,6 @@ def pick_peak_near(profile, expected_frac, radius_frac):
 
     lo = max(0, expected - radius)
     hi = min(n - 1, expected + radius)
-
-    candidates = filter_band_candidates(profile)
 
     best = None
     best_score = -1e9
@@ -358,9 +304,9 @@ def pick_peak_near(profile, expected_frac, radius_frac):
 
     return best
 
-def pick_t_c_from_peaks(profile):
-    t_idx = pick_peak_near(profile, EXPECTED_T_FRAC, SEARCH_RADIUS_FRAC)
-    c_idx = pick_peak_near(profile, EXPECTED_C_FRAC, SEARCH_RADIUS_FRAC)
+def pick_t_c_from_peaks(profile, candidates):
+    t_idx = pick_peak_near(profile, candidates, EXPECTED_T_FRAC, SEARCH_RADIUS_FRAC)
+    c_idx = pick_peak_near(profile, candidates, EXPECTED_C_FRAC, SEARCH_RADIUS_FRAC)
 
     if t_idx is not None and c_idx is not None:
         min_sep = int(MIN_TC_SEPARATION_FRAC * len(profile))
@@ -376,27 +322,6 @@ def pick_t_c_from_peaks(profile):
         c_idx, t_idx = t_idx, None
 
     return t_idx, c_idx
-
-def band_strength(profile, idx, half_width=6):
-    """
-    Estimate band strength as peak height above local baseline.
-    """
-    if idx is None:
-        return 0.0
-
-    n = len(profile)
-
-    lo = max(0, idx - half_width)
-    hi = min(n, idx + half_width + 1)
-
-    peak = np.max(profile[lo:hi])
-
-    mask = np.ones(n, dtype=bool)
-    mask[lo:hi] = False
-
-    baseline = np.median(profile[mask])
-
-    return float(peak - baseline)
 
 def band_signal_snr(profile, idx, half_width=6):
     """
@@ -554,7 +479,7 @@ def main():
 
                 candidates = filter_band_candidates(profile)
 
-                t_idx, c_idx = pick_t_c_from_peaks(profile)
+                t_idx, c_idx = pick_t_c_from_peaks(profile, candidates)
 
                 if c_idx is not None:
                     canon_x = x0 + sx0 + c_idx
@@ -566,7 +491,7 @@ def main():
                         y0,
                         y1,
                         "C",
-                        (0,255,255)
+                        (0, 255, 0)
                     )
 
                 if t_idx is not None:
@@ -579,35 +504,7 @@ def main():
                         y0,
                         y1,
                         "T",
-                        (255,255,0)
-                    )
-
-                strip_x0 = int(STRIP_X0_FRAC * results_window.shape[1])
-
-                if c_idx is not None:
-                    canon_x = x0 + strip_x0 + c_idx
-
-                    draw_band_line_on_main(
-                        disp,
-                        quad,
-                        canon_x,
-                        y0,
-                        y1,
-                        "C",
-                        (0,255,0)
-                    )
-
-                if t_idx is not None:
-                    canon_x = x0 + strip_x0 + t_idx
-
-                    draw_band_line_on_main(
-                        disp,
-                        quad,
-                        canon_x,
-                        y0,
-                        y1,
-                        "T",
-                        (255,255,0)
+                        (255, 255, 0)
                     )
 
                 t_strength, t_snr = band_signal_snr(
