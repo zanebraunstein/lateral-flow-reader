@@ -155,7 +155,13 @@ def extract_strip_roi(results_window):
     return results_window[y0:y1, x0:x1]
 
 
-def redness_profile(strip_bgr):
+def raw_redness_profile(strip_bgr):
+    """
+    Baseline-centred redness profile in LAB a* units.
+
+    These units are physically meaningful: they scale with how much dye is
+    on the membrane, which is what a density / viral-load estimate needs.
+    """
     lab = cv.cvtColor(strip_bgr, cv.COLOR_BGR2LAB)
 
     a = lab[:, :, 1].astype(np.float32)
@@ -182,10 +188,28 @@ def redness_profile(strip_bgr):
 
     profile -= np.median(profile)
 
-    mad = np.median(np.abs(profile)) + 1e-6
-    profile /= mad
-
     return profile
+
+
+def profile_scale(raw_profile):
+    """
+    Robust spread of a raw profile, used to normalise it for detection.
+
+    NOTE: this grows with the bands themselves, so dividing by it compresses
+    the dose response. Good for thresholding, wrong for density -- measure
+    density on the raw profile instead.
+    """
+    return float(np.median(np.abs(raw_profile)) + 1e-6)
+
+
+def redness_profile(strip_bgr):
+    """
+    Noise-normalised profile, in units of the strip's own robust spread.
+    Use for peak detection and SNR gating, not for density.
+    """
+    raw = raw_redness_profile(strip_bgr)
+
+    return raw / profile_scale(raw)
 
 
 def find_peak_candidates(profile):
@@ -210,7 +234,10 @@ def find_peak_candidates(profile):
     return candidates
 
 
-def band_width_peak(profile, idx, frac=0.5):
+def band_extent(profile, idx, frac=0.5):
+    """
+    Edges of the band around `idx`, walked out to `frac` of its peak height.
+    """
     peak = float(profile[idx])
     base = float(np.median(profile))
     level = base + frac * (peak - base)
@@ -222,6 +249,12 @@ def band_width_peak(profile, idx, frac=0.5):
     right = idx
     while right < len(profile) - 1 and profile[right] > level:
         right += 1
+
+    return left, right
+
+
+def band_width_peak(profile, idx, frac=0.5):
+    left, right = band_extent(profile, idx, frac)
 
     return right - left
 
@@ -286,21 +319,13 @@ def pick_t_c_from_peaks(profile, candidates):
     return t_idx, c_idx
 
 
-def band_signal_snr(profile, idx, half_width=6):
+def band_background(profile, idx, half_width=6):
     """
-    Return band strength and signal-to-noise ratio.
+    Profile samples far enough from the band at `idx` to estimate the local
+    baseline and noise without the band contaminating them.
     """
-    if idx is None:
-        return 0.0, 0.0
-
     n = len(profile)
 
-    lo = max(0, idx - half_width)
-    hi = min(n, idx + half_width + 1)
-
-    peak = float(np.max(profile[lo:hi]))
-
-    # Exclude the candidate band from background estimation
     mask = np.ones(n, dtype=bool)
     mask[
         max(0, idx - 3 * half_width):
@@ -312,8 +337,61 @@ def band_signal_snr(profile, idx, half_width=6):
     if background.size < 20:
         background = profile
 
+    return background
+
+
+def band_peak_height(profile, idx, half_width=6):
+    """
+    Peak height above the local baseline, in whatever units `profile` carries.
+    """
+    if idx is None:
+        return 0.0
+
+    n = len(profile)
+
+    lo = max(0, idx - half_width)
+    hi = min(n, idx + half_width + 1)
+
+    peak = float(np.max(profile[lo:hi]))
+    baseline = float(np.median(band_background(profile, idx, half_width)))
+
+    return peak - baseline
+
+
+def band_area(profile, idx, half_width=6, frac=0.5):
+    """
+    Integrated signal above the local baseline across the band.
+
+    Pass the RAW profile to get a density in a* units. Area is a better
+    density proxy than peak height: it tracks total dye rather than the
+    single darkest sample, so it holds up when focus drift spreads a band
+    out without changing how much dye is there.
+    """
+    if idx is None:
+        return 0.0
+
+    baseline = float(np.median(band_background(profile, idx, half_width)))
+
+    left, right = band_extent(profile, idx, frac)
+
+    segment = profile[left:right + 1] - baseline
+
+    # Clip so a dipping baseline cannot subtract from the integral
+    return float(np.sum(np.clip(segment, 0.0, None)))
+
+
+def band_signal_snr(profile, idx, half_width=6):
+    """
+    Return band strength and signal-to-noise ratio.
+    """
+    if idx is None:
+        return 0.0, 0.0
+
+    background = band_background(profile, idx, half_width)
+
     baseline = float(np.median(background))
-    strength = peak - baseline
+
+    strength = band_peak_height(profile, idx, half_width)
 
     # Robust noise estimate
     noise = float(
@@ -329,11 +407,16 @@ def band_signal_snr(profile, idx, half_width=6):
 class BandReading:
     """
     One band (test or control) as measured in a single frame.
+
+    `strength` and `snr` are in normalised units and drive detection.
+    `area` and `peak_a` are in raw a* units and carry the density.
     """
     idx: Optional[int]
     strength: float
     snr: float
     present: bool
+    area: float = 0.0
+    peak_a: float = 0.0
 
 
 @dataclass
@@ -352,6 +435,9 @@ class FrameResult:
     test: BandReading
     control: BandReading
     tc_ratio: float
+    raw_profile: Optional[np.ndarray] = None
+    scale: float = 1.0
+    tc_area_ratio: float = 0.0
 
 
 def analyze(frame):
@@ -373,13 +459,23 @@ def analyze(frame):
     # Copy: the result must stay valid even if the caller later draws on `warped`
     strip_roi = extract_strip_roi(results_window).copy()
 
-    profile = redness_profile(strip_roi)
+    # Detection runs on the normalised profile; density on the raw one
+    raw_profile = raw_redness_profile(strip_roi)
+    scale = profile_scale(raw_profile)
+    profile = raw_profile / scale
+
     candidates = filter_band_candidates(profile)
 
     t_idx, c_idx = pick_t_c_from_peaks(profile, candidates)
 
     t_strength, t_snr = band_signal_snr(profile, t_idx)
     c_strength, c_snr = band_signal_snr(profile, c_idx)
+
+    t_area = band_area(raw_profile, t_idx)
+    c_area = band_area(raw_profile, c_idx)
+
+    t_peak_a = band_peak_height(raw_profile, t_idx)
+    c_peak_a = band_peak_height(raw_profile, c_idx)
 
     control_present = c_snr >= CONTROL_SNR_THRESHOLD
     test_present = t_snr >= TEST_SNR_THRESHOLD and control_present
@@ -389,6 +485,13 @@ def analyze(frame):
     else:
         tc_ratio = 0.0
 
+    # Density ratio: normalising T by C absorbs run-to-run variation in
+    # sample volume and flow rate, so this is the load-comparable figure.
+    if c_area > 1e-6:
+        tc_area_ratio = t_area / c_area
+    else:
+        tc_area_ratio = 0.0
+
     return FrameResult(
         quad=quad,
         warped=warped,
@@ -397,9 +500,12 @@ def analyze(frame):
         strip_roi=strip_roi,
         profile=profile,
         candidates=candidates,
-        test=BandReading(t_idx, t_strength, t_snr, test_present),
-        control=BandReading(c_idx, c_strength, c_snr, control_present),
-        tc_ratio=tc_ratio
+        test=BandReading(t_idx, t_strength, t_snr, test_present, t_area, t_peak_a),
+        control=BandReading(c_idx, c_strength, c_snr, control_present, c_area, c_peak_a),
+        tc_ratio=tc_ratio,
+        raw_profile=raw_profile,
+        scale=scale,
+        tc_area_ratio=tc_area_ratio
     )
 
 

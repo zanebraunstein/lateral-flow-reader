@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Recorded assay runs (large; each run is experiment data, not source)
+runs/
+signal_log.csv
