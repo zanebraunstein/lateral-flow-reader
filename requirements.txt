@@ -1,3 +1,20 @@
-opencv-python
-numpy
-picamera2
+# Runtime dependencies.
+#
+# picamera2 and libcamera are deliberately NOT listed here: on Raspberry Pi OS
+# they come from apt, not pip, because they need libcamera bindings pip cannot
+# build. They ship preinstalled on Bookworm; otherwise:
+#
+#     sudo apt install -y python3-picamera2
+#
+# Then:
+#
+#     pip install -r requirements.txt
+#
+# In a virtualenv, create it with --system-site-packages or the apt-installed
+# picamera2 will not be importable.
+#
+# Only main.py needs the camera. strip.py, viz.py, recorder.py and analysis.py
+# need just the two packages below.
+
+numpy>=1.24
+opencv-python>=4.6
