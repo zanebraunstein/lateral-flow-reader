@@ -1,0 +1,8 @@
+# Test dependencies. The suite runs on a workstation -- picamera2 and
+# libcamera are stubbed in tests/conftest.py, so no Pi is required.
+#
+#   pip install -r requirements-dev.txt
+#   pytest
+pytest>=7.0
+numpy
+opencv-python-headless
