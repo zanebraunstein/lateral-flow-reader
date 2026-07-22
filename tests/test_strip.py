@@ -110,6 +110,25 @@ def test_lone_test_band_is_not_a_valid_control():
     assert not result.test.present
 
 
+def test_crowded_peaks_keep_the_control_window_candidate():
+    """
+    Two bands too close to be a real T/C pair means one is spurious. The
+    control must stay where the control belongs -- resolving by peak height
+    used to label a band at the test position as the control.
+    """
+    profile, (t_idx, c_idx) = picks(
+        synth.strip_image([(0.55, 80), (0.68, 30)])   # test-side band stronger
+    )
+    n = len(profile)
+
+    assert t_idx is None
+    assert c_idx is not None
+    assert c_idx / n > 0.63, (
+        f"control reported at {c_idx / n:.2f} of the strip, which is the test "
+        "side; expected the control-window candidate near 0.68"
+    )
+
+
 def _result(test_present, control_present=True):
     """Minimal FrameResult carrying just the detection flags."""
     return strip.FrameResult(

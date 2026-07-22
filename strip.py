@@ -306,12 +306,12 @@ def pick_t_c_from_peaks(profile, candidates):
     if t_idx is not None and c_idx is not None:
         min_sep = int(MIN_TC_SEPARATION_FRAC * len(profile))
 
+        # Too close to be a real T/C pair, so one of them is spurious. Keep
+        # the control-window candidate: the control sits at a fixed, known
+        # position and is the validity anchor, whereas picking by peak height
+        # can label a band at the test position as the control.
         if abs(t_idx - c_idx) < min_sep:
-            if profile[c_idx] >= profile[t_idx]:
-                t_idx = None
-            else:
-                c_idx = t_idx
-                t_idx = None
+            t_idx = None
 
     # A band at the test position is NOT evidence of a control line. If the
     # control never developed the run is invalid, and saying so is safer than
