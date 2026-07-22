@@ -93,13 +93,6 @@ def test_analyze_returns_none_without_cassette():
     assert strip.analyze(synth.blank_frame()) is None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="KNOWN BUG: pick_t_c_from_peaks promotes a lone test-position band "
-           "to the control, so a cassette whose control never developed reads "
-           "as a valid negative instead of invalid. Decision pending; remove "
-           "this marker once the promotion rule is resolved."
-)
 def test_lone_test_band_is_not_a_valid_control():
     """
     A cassette with a test line but no control line is INVALID. Reporting it

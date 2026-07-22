@@ -313,8 +313,9 @@ def pick_t_c_from_peaks(profile, candidates):
                 c_idx = t_idx
                 t_idx = None
 
-    if c_idx is None and t_idx is not None:
-        c_idx, t_idx = t_idx, None
+    # A band at the test position is NOT evidence of a control line. If the
+    # control never developed the run is invalid, and saying so is safer than
+    # promoting the test band and reporting a valid negative.
 
     return t_idx, c_idx
 
