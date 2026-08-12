@@ -125,7 +125,7 @@ def test_camera_is_released_when_the_loop_raises(monkeypatch, tmp_path, fake_cam
         return camera
 
     monkeypatch.setattr(main, "start_camera", tracking_start)
-    monkeypatch.setattr(main.strip, "analyze", lambda frame: 1 / 0)
+    monkeypatch.setattr(main.strip, "analyze", lambda frame, window_quad=None: 1 / 0)
 
     try:
         main.main()

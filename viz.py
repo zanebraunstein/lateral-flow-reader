@@ -28,17 +28,21 @@ def draw_band_line_on_main(
     y0,
     y1,
     label,
-    color
+    color,
+    canon_w=CANON_W,
+    canon_h=CANON_H
 ):
     """
-    Project a band position from canonical cassette space back onto the
-    live camera view.
+    Project a band position from canonical warped space back onto the live
+    camera view. `canon_w`/`canon_h` are the dimensions of the warp `quad`
+    maps to -- the full cassette when detecting, the results window when
+    calibrated.
     """
     dst = np.array([
         [0, 0],
-        [CANON_W - 1, 0],
-        [CANON_W - 1, CANON_H - 1],
-        [0, CANON_H - 1]
+        [canon_w - 1, 0],
+        [canon_w - 1, canon_h - 1],
+        [0, canon_h - 1]
     ], dtype=np.float32)
 
     Minv = cv.getPerspectiveTransform(
@@ -251,6 +255,10 @@ def render(frame, result, stable_test=False, stable_control=False):
     x0, y0, x1, y1 = result.window_bounds
     sx0, sy0, sx1, sy1 = result.strip_rect
 
+    # The warp `result.quad` maps to may be the full cassette or just the
+    # results window; project band lines back using its actual dimensions.
+    canon_h, canon_w = result.warped.shape[:2]
+
     for band, label, color in (
         (result.control, "C", COLOR_CONTROL),
         (result.test, "T", COLOR_TEST)
@@ -263,7 +271,9 @@ def render(frame, result, stable_test=False, stable_control=False):
                 y0,
                 y1,
                 label,
-                color
+                color,
+                canon_w,
+                canon_h
             )
 
     draw_readout(

@@ -6,6 +6,7 @@ import cv2 as cv
 from picamera2 import Picamera2
 from libcamera import controls
 
+import calibration as calib
 import recorder
 import strip
 import viz
@@ -85,6 +86,19 @@ def csv_row(elapsed, result, stability):
 
 
 def main():
+    calibration = calib.load()
+
+    if calibration is not None:
+        window_quad = calibration.window_quad
+        print("Using fixed-rig calibration from", calib.CALIBRATION_PATH)
+    else:
+        window_quad = None
+        print(
+            "No calibration found -- falling back to full-cassette detection.\n"
+            "For a fixed rig, run 'python3 calibrate.py' once to mark the "
+            "results window."
+        )
+
     run_dir = recorder.create_run_dir()
     print("Recording run to", run_dir)
 
@@ -114,7 +128,7 @@ def main():
                 cv.COLOR_RGB2BGR
             )
 
-            result = strip.analyze(frame)
+            result = strip.analyze(frame, window_quad)
 
             if result is not None:
                 stability.update(result)

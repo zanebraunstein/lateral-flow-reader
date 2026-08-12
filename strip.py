@@ -23,6 +23,13 @@ WINDOW_Y0 = 0.22
 WINDOW_X1 = 0.93
 WINDOW_Y1 = 0.78
 
+# Canonical size of the results window on its own. Chosen to equal the pixel
+# size of the window crop in the full-cassette path, so the strip sample count
+# is identical either way and every tuning constant below stays valid whether
+# the window is found by detection or by calibration.
+WINDOW_CANON_W = int((WINDOW_X1 - WINDOW_X0) * CANON_W)
+WINDOW_CANON_H = int((WINDOW_Y1 - WINDOW_Y0) * CANON_H)
+
 STRIP_Y0_FRAC = 0.44
 STRIP_Y1_FRAC = 0.66
 
@@ -103,12 +110,16 @@ def find_cassette_quad(frame):
     return None
 
 
-def warp_cassette(frame, quad):
+def warp_quad(frame, quad, out_w, out_h):
+    """
+    Perspective-warp the region bounded by `quad` to an out_w x out_h image.
+    `quad` is four points ordered tl, tr, br, bl in frame coordinates.
+    """
     dst = np.array([
         [0, 0],
-        [CANON_W - 1, 0],
-        [CANON_W - 1, CANON_H - 1],
-        [0, CANON_H - 1]
+        [out_w - 1, 0],
+        [out_w - 1, out_h - 1],
+        [0, out_h - 1]
     ], dtype=np.float32)
 
     M = cv.getPerspectiveTransform(
@@ -119,8 +130,12 @@ def warp_cassette(frame, quad):
     return cv.warpPerspective(
         frame,
         M,
-        (CANON_W, CANON_H)
+        (out_w, out_h)
     )
+
+
+def warp_cassette(frame, quad):
+    return warp_quad(frame, quad, CANON_W, CANON_H)
 
 
 def results_window_bounds():
@@ -441,22 +456,42 @@ class FrameResult:
     tc_area_ratio: float = 0.0
 
 
-def analyze(frame):
+def analyze(frame, window_quad=None):
     """
-    Locate the cassette and measure the test and control bands.
+    Measure the test and control bands in one frame.
 
-    Returns a FrameResult, or None if no cassette was found.
+    With `window_quad` (four points bounding the results window in frame
+    coordinates, e.g. from a fixed-rig calibration) the window is warped
+    directly and no cassette detection happens -- so it works even when most
+    of the cassette is out of frame. Without it, the full cassette is detected
+    and its results window taken as a fixed fraction of the warp.
+
+    Returns a FrameResult, or None if no cassette was found (detection path).
     """
-    quad = find_cassette_quad(frame)
+    if window_quad is not None:
+        quad = np.asarray(window_quad, dtype=np.float32)
+        warped = warp_quad(frame, quad, WINDOW_CANON_W, WINDOW_CANON_H)
+        window_bounds = (0, 0, WINDOW_CANON_W, WINDOW_CANON_H)
+        results_window = warped
+    else:
+        quad = find_cassette_quad(frame)
 
-    if quad is None:
-        return None
+        if quad is None:
+            return None
 
-    warped = warp_cassette(frame, quad)
+        warped = warp_cassette(frame, quad)
 
-    x0, y0, x1, y1 = results_window_bounds()
-    results_window = warped[y0:y1, x0:x1]
+        x0, y0, x1, y1 = results_window_bounds()
+        window_bounds = (x0, y0, x1, y1)
+        results_window = warped[y0:y1, x0:x1]
 
+    return _measure_strip(results_window, warped, quad, window_bounds)
+
+
+def _measure_strip(results_window, warped, quad, window_bounds):
+    """
+    Shared measurement core for both the detection and calibration paths.
+    """
     # Copy: the result must stay valid even if the caller later draws on `warped`
     strip_roi = extract_strip_roi(results_window).copy()
 
@@ -496,7 +531,7 @@ def analyze(frame):
     return FrameResult(
         quad=quad,
         warped=warped,
-        window_bounds=(x0, y0, x1, y1),
+        window_bounds=window_bounds,
         strip_rect=strip_bounds(results_window),
         strip_roi=strip_roi,
         profile=profile,

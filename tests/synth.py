@@ -69,6 +69,54 @@ def blank_frame():
     return np.full((1080, 1920, 3), 30, np.uint8)
 
 
+def window_scene(t_amp=50, c_amp=70, quad=None):
+    """
+    A frame containing ONLY the results window (bright membrane rectangle with
+    C and T bands), warped into place at an arbitrary tilted quad -- the rest
+    of the cassette is absent, as in a close-up fixed rig.
+
+    Returns (frame, window_quad). Feeding window_quad back into
+    strip.analyze(frame, window_quad) must recover the bands, which is the
+    round trip the calibration path relies on.
+
+    Bands are painted at the strip fractions inside the canonical window, so a
+    correct warp lands them at EXPECTED_T_FRAC / EXPECTED_C_FRAC of the strip.
+    """
+    import strip
+
+    w, h = strip.WINDOW_CANON_W, strip.WINDOW_CANON_H
+
+    canvas = np.full((h, w, 3), MEMBRANE, np.uint8)
+
+    sx0, sy0, sx1, sy1 = strip.strip_bounds(canvas)
+    strip_w = sx1 - sx0
+
+    for frac, amp in ((strip.EXPECTED_T_FRAC, t_amp), (strip.EXPECTED_C_FRAC, c_amp)):
+        if amp <= 0:
+            continue
+
+        x = int(sx0 + frac * strip_w)
+        canvas[sy0:sy1, x - 5:x + 6] = (MEMBRANE - amp, MEMBRANE - amp, MEMBRANE)
+
+    if quad is None:
+        # An off-centre, slightly tilted placement in a 1080p frame
+        quad = np.array(
+            [[500, 300], [1400, 330], [1380, 700], [520, 670]],
+            dtype=np.float32
+        )
+
+    src = np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.float32)
+    matrix = cv.getPerspectiveTransform(src, quad)
+
+    frame = np.full((1080, 1920, 3), 30, np.uint8)
+    cv.warpPerspective(
+        canvas, matrix, (1920, 1080),
+        dst=frame, borderMode=cv.BORDER_TRANSPARENT
+    )
+
+    return frame, quad
+
+
 def true_band_excess(result):
     """
     The a* excess the test band actually puts on the membrane, measured

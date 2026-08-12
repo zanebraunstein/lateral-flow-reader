@@ -23,17 +23,29 @@ figure to compare between cassettes.
 
 ```
 camera frame
-  -> locate cassette (Canny + contour, largest convex quad)
-  -> perspective warp to a canonical 900x320 view
-  -> slice results window, then the strip ROI (fixed fractions of the warp)
+  -> locate the results window
+       calibrated fixed rig:  warp the marked window quad          (default)
+       or full-cassette:      Canny + largest convex quad -> warp
+  -> slice the strip ROI (fixed fractions of the warped window)
   -> LAB a* channel, Gaussian background subtraction, vertical median
      -> 1-D redness profile
   -> peak detection, band-width filtering, T/C assignment by expected position
   -> SNR gating, then temporal voting across frames
 ```
 
+There are two ways to locate the strip, and they feed identical downstream
+analysis:
+
+- **Fixed rig (recommended):** calibrate the results window once (see below).
+  Every frame warps that fixed region — no per-frame detection, so it works
+  even when most of the cassette is out of frame, and there is no detection
+  jitter in the measurement.
+- **Full-cassette detection:** used when there is no calibration. Finds the
+  whole cassette as a convex quad, which requires the entire cassette in frame
+  against a contrasting background.
+
 Working in a canonical warped space means every region of interest is a
-fraction rather than a pixel count, so the reader tolerates the camera moving.
+fraction rather than a pixel count.
 
 Two properties are load-bearing and worth knowing before changing anything:
 
@@ -55,10 +67,12 @@ Two properties are load-bearing and worth knowing before changing anything:
 | `viz.py` | display overlays (draws only on copies) |
 | `recorder.py` | per-run capture of profiles and decimated frames |
 | `analysis.py` | offline analysis of a recorded run |
+| `calibration.py` | load/save the fixed-rig strip location |
+| `calibrate.py` | one-time interactive calibration tool |
 | `tests/` | pytest suite, runs on a workstation |
 
-`strip.py`, `viz.py`, `recorder.py` and `analysis.py` import nothing
-Pi-specific, so everything except the capture loop can be developed and
+`strip.py`, `viz.py`, `recorder.py`, `analysis.py` and `calibration.py` import
+nothing Pi-specific, so everything except the capture loop can be developed and
 tested on a laptop.
 
 ## Install
@@ -83,16 +97,34 @@ apt-installed picamera2 will not be visible inside it:
 python3 -m venv --system-site-packages .venv
 ```
 
+## Calibrating a fixed rig
+
+With the camera mounted at a fixed position over the cassette, calibrate once:
+
+```sh
+python3 calibrate.py
+```
+
+Click the four corners of the results window — the bright membrane rectangle
+containing the C and T lines. A live preview shows the warped strip and its
+signal profile with the current corners, and reports the control-line SNR, so
+you can confirm the bands are found before saving. Press `s` to save (`r`
+resets, `q` quits).
+
+This writes `calibration.json` (rig-specific, git-ignored). `main.py` then
+picks it up automatically and skips cassette detection entirely. Re-run
+`calibrate.py` whenever the camera or cassette position changes.
+
 ## Running a test
 
 ```sh
 python3 main.py
 ```
 
-Point the camera at the cassette. The reader searches for it every frame and
-starts measuring as soon as it locks on. Live windows show the camera view
-with detected bands projected back onto it, the warped cassette, the strip
-ROI, and the 1-D signal profile.
+With a calibration present the reader uses the fixed window immediately; without
+one it falls back to searching for the whole cassette each frame. Live windows
+show the camera view with detected bands projected back onto it, the warped
+window, the strip ROI, and the 1-D signal profile.
 
 A run stops automatically after `RUN_DURATION_S` (15 minutes) so that runs are
 comparable and the plateau is well defined. `q` stops early; the summary line
@@ -182,6 +214,6 @@ Validated end-to-end against synthetic data. Detection thresholds still need
 calibrating against real cassettes — record a run, then sweep thresholds
 offline with `analysis.py --test-snr`.
 
-Known limitation: the cassette quad is re-detected independently every frame,
-so the ROI jitters by a pixel or two between frames. That noise lands in the
-series used for the rate-of-change measurement.
+The fixed-rig calibration path holds the strip location constant, which removes
+the per-frame ROI jitter that the full-cassette detection path would otherwise
+introduce into the rate-of-change measurement.
