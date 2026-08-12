@@ -98,6 +98,35 @@ def window_scene(t_amp=50, c_amp=70, quad=None):
         x = int(sx0 + frac * strip_w)
         canvas[sy0:sy1, x - 5:x + 6] = (MEMBRANE - amp, MEMBRANE - amp, MEMBRANE)
 
+    return _paint_window(canvas, quad)
+
+
+def window_scene_at(control_frac, test_frac, control_amp=70, test_amp=50, quad=None):
+    """
+    Like window_scene but with the control and test bands placed at explicit
+    strip fractions -- so a cassette of either orientation can be built
+    (e.g. control on the left with control_frac < test_frac).
+    """
+    import strip
+
+    w, h = strip.WINDOW_CANON_W, strip.WINDOW_CANON_H
+    canvas = np.full((h, w, 3), MEMBRANE, np.uint8)
+
+    sx0, sy0, sx1, sy1 = strip.strip_bounds(canvas)
+    strip_w = sx1 - sx0
+
+    for frac, amp in ((control_frac, control_amp), (test_frac, test_amp)):
+        if amp <= 0:
+            continue
+        x = int(sx0 + frac * strip_w)
+        canvas[sy0:sy1, x - 5:x + 6] = (MEMBRANE - amp, MEMBRANE - amp, MEMBRANE)
+
+    return _paint_window(canvas, quad)
+
+
+def _paint_window(canvas, quad):
+    h, w = canvas.shape[:2]
+
     if quad is None:
         # An off-centre, slightly tilted placement in a 1080p frame
         quad = np.array(

@@ -57,6 +57,109 @@ def test_calibration_measures_with_no_cassette_present():
     assert result.test.present
 
 
+def test_dominant_two_bands_returns_peaks_left_to_right():
+    # Make the RIGHT band the stronger one, so strength order (right, left)
+    # differs from position order -- only a position sort gives left-to-right.
+    frame, quad = synth.window_scene_at(
+        control_frac=0.20, test_frac=0.80, control_amp=45, test_amp=75
+    )
+    result = strip.analyze(frame, window_quad=quad, bands=(0.80, 0.20))
+
+    found = strip.dominant_two_bands(result.profile, result.candidates)
+
+    assert len(found) == 2
+    assert found[0] < found[1]     # ordered by position, not strength
+    n = len(result.profile)
+    assert found[0] / n == pytest.approx(0.20, abs=0.05)
+    assert found[1] / n == pytest.approx(0.80, abs=0.05)
+
+
+def test_learn_bands_assigns_by_control_side():
+    """
+    The same two bands must map to opposite roles depending on which side the
+    control is on -- this is what makes either cassette orientation work.
+    """
+    import calibrate
+
+    # Strong band left (0.20), weaker band right (0.80)
+    frame, quad = synth.window_scene_at(
+        control_frac=0.20, test_frac=0.80, control_amp=75, test_amp=45
+    )
+    probe = strip.analyze(frame, window_quad=quad)
+
+    control_frac, test_frac = calibrate.learn_bands(probe, "left")
+    assert control_frac == pytest.approx(0.20, abs=0.05)
+    assert test_frac == pytest.approx(0.80, abs=0.05)
+
+    control_frac, test_frac = calibrate.learn_bands(probe, "right")
+    assert control_frac == pytest.approx(0.80, abs=0.05)
+    assert test_frac == pytest.approx(0.20, abs=0.05)
+
+
+def test_dominant_two_bands_respects_separation():
+    """Two peaks too close collapse to one -- they cannot be a real T/C pair."""
+    frame, quad = synth.window_scene_at(control_frac=0.48, test_frac=0.52)
+    result = strip.analyze(frame, window_quad=quad)
+
+    assert len(strip.dominant_two_bands(result.profile, result.candidates)) == 1
+
+
+def test_reversed_orientation_control_on_left():
+    """
+    A cassette with control on the LEFT and test on the RIGHT -- the opposite
+    of the module defaults. Learning positions from the cassette and searching
+    near them must put control and test on the correct bands.
+
+    This is the real-cassette case that motivated learned band positions.
+    """
+    # Control (strong) left at 0.20, test (weaker) right at 0.80
+    frame, quad = synth.window_scene_at(
+        control_frac=0.20, test_frac=0.80, control_amp=70, test_amp=45
+    )
+
+    # control on the left -> control_frac < test_frac
+    result = strip.analyze(frame, window_quad=quad, bands=(0.80, 0.20))
+
+    assert result.control.present
+    assert result.test.present
+
+    n = len(result.profile)
+    assert result.control.idx / n == pytest.approx(0.20, abs=0.05)
+    assert result.test.idx / n == pytest.approx(0.80, abs=0.05)
+    # the control band is the stronger one here; density is measured on test
+    assert result.control.peak_a > result.test.peak_a
+
+
+def test_learned_bands_survive_calibration_round_trip(tmp_path):
+    """
+    calibrate.py stores learned positions; main.py loads them via .bands.
+    """
+    cal = calib.from_points(
+        [(500, 300), (1400, 330), (1380, 700), (520, 670)],
+        (1920, 1080),
+        control_frac=0.20, test_frac=0.80,
+    )
+    cal.save(str(tmp_path / "c.json"))
+    loaded = calib.load(str(tmp_path / "c.json"))
+
+    assert loaded.bands == (0.80, 0.20)     # (test_frac, control_frac)
+
+
+def test_bands_is_none_when_positions_absent():
+    cal = calib.from_points([(0, 0), (1, 0), (1, 1), (0, 1)], (10, 10))
+    assert cal.bands is None
+
+
+def test_none_test_frac_means_no_test_band():
+    """A calibration that only learned the control searches for no test line."""
+    frame, quad = synth.window_scene(t_amp=50, c_amp=70)
+
+    result = strip.analyze(frame, window_quad=quad, bands=(None, strip.EXPECTED_C_FRAC))
+
+    assert result.control.present
+    assert result.test.idx is None
+
+
 def test_calibration_control_only_is_negative_not_invalid():
     frame, quad = synth.window_scene(t_amp=0, c_amp=70)
 

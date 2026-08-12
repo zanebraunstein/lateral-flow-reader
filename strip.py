@@ -314,9 +314,51 @@ def pick_peak_near(profile, candidates, expected_frac, radius_frac):
     return best
 
 
-def pick_t_c_from_peaks(profile, candidates):
-    t_idx = pick_peak_near(profile, candidates, EXPECTED_T_FRAC, SEARCH_RADIUS_FRAC)
-    c_idx = pick_peak_near(profile, candidates, EXPECTED_C_FRAC, SEARCH_RADIUS_FRAC)
+def dominant_two_bands(profile, candidates, min_sep_frac=MIN_TC_SEPARATION_FRAC):
+    """
+    The strongest candidate peaks that are far enough apart to be a real band
+    pair, returned ordered left-to-right by position (0, 1, or 2 of them).
+
+    For a calibrated fixed rig this locates the control and test bands with no
+    assumed positions; the caller labels them from the known control side.
+    """
+    if not candidates:
+        return []
+
+    min_sep = int(min_sep_frac * len(profile))
+
+    chosen = [candidates[0]]
+
+    for idx in candidates[1:]:
+        if all(abs(idx - c) >= min_sep for c in chosen):
+            chosen.append(idx)
+
+            if len(chosen) == 2:
+                break
+
+    return sorted(chosen)
+
+
+def pick_t_c_from_peaks(
+    profile,
+    candidates,
+    test_frac=EXPECTED_T_FRAC,
+    control_frac=EXPECTED_C_FRAC,
+    radius_frac=SEARCH_RADIUS_FRAC
+):
+    """
+    Assign test and control bands by searching near their expected fractional
+    positions. For a fixed rig those come from calibration; otherwise they are
+    the module defaults. A None fraction means that band is not searched for.
+    """
+    t_idx = (
+        None if test_frac is None
+        else pick_peak_near(profile, candidates, test_frac, radius_frac)
+    )
+    c_idx = (
+        None if control_frac is None
+        else pick_peak_near(profile, candidates, control_frac, radius_frac)
+    )
 
     if t_idx is not None and c_idx is not None:
         min_sep = int(MIN_TC_SEPARATION_FRAC * len(profile))
@@ -456,7 +498,7 @@ class FrameResult:
     tc_area_ratio: float = 0.0
 
 
-def analyze(frame, window_quad=None):
+def analyze(frame, window_quad=None, bands=None):
     """
     Measure the test and control bands in one frame.
 
@@ -465,6 +507,10 @@ def analyze(frame, window_quad=None):
     directly and no cassette detection happens -- so it works even when most
     of the cassette is out of frame. Without it, the full cassette is detected
     and its results window taken as a fixed fraction of the warp.
+
+    `bands` is an optional (test_frac, control_frac) pair giving the expected
+    band positions along the strip, as learned during calibration. Without it
+    the module defaults are used.
 
     Returns a FrameResult, or None if no cassette was found (detection path).
     """
@@ -485,13 +531,17 @@ def analyze(frame, window_quad=None):
         window_bounds = (x0, y0, x1, y1)
         results_window = warped[y0:y1, x0:x1]
 
-    return _measure_strip(results_window, warped, quad, window_bounds)
+    return _measure_strip(results_window, warped, quad, window_bounds, bands)
 
 
-def _measure_strip(results_window, warped, quad, window_bounds):
+def _measure_strip(results_window, warped, quad, window_bounds, bands=None):
     """
     Shared measurement core for both the detection and calibration paths.
     """
+    if bands is not None:
+        test_frac, control_frac = bands
+    else:
+        test_frac, control_frac = EXPECTED_T_FRAC, EXPECTED_C_FRAC
     # Copy: the result must stay valid even if the caller later draws on `warped`
     strip_roi = extract_strip_roi(results_window).copy()
 
@@ -502,7 +552,7 @@ def _measure_strip(results_window, warped, quad, window_bounds):
 
     candidates = filter_band_candidates(profile)
 
-    t_idx, c_idx = pick_t_c_from_peaks(profile, candidates)
+    t_idx, c_idx = pick_t_c_from_peaks(profile, candidates, test_frac, control_frac)
 
     t_strength, t_snr = band_signal_snr(profile, t_idx)
     c_strength, c_snr = band_signal_snr(profile, c_idx)

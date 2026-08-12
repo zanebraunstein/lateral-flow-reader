@@ -90,9 +90,11 @@ def main():
 
     if calibration is not None:
         window_quad = calibration.window_quad
+        bands = calibration.bands
         print("Using fixed-rig calibration from", calib.CALIBRATION_PATH)
     else:
         window_quad = None
+        bands = None
         print(
             "No calibration found -- falling back to full-cassette detection.\n"
             "For a fixed rig, run 'python3 calibrate.py' once to mark the "
@@ -128,7 +130,7 @@ def main():
                 cv.COLOR_RGB2BGR
             )
 
-            result = strip.analyze(frame, window_quad)
+            result = strip.analyze(frame, window_quad, bands)
 
             if result is not None:
                 stability.update(result)

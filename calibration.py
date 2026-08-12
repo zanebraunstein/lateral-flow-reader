@@ -30,25 +30,46 @@ class Calibration:
     window_quad: np.ndarray
     frame_size: tuple
 
+    # Band positions along the strip (fraction 0..1), learned from the cassette
+    # during calibration. This is what lets the reader handle either cassette
+    # orientation without hand-tuned constants. None if not captured.
+    control_frac: float = None
+    test_frac: float = None
+
+    @property
+    def bands(self):
+        """(test_frac, control_frac) for strip.analyze, or None if uncaptured."""
+        if self.control_frac is None and self.test_frac is None:
+            return None
+
+        return (self.test_frac, self.control_frac)
+
     def save(self, path=CALIBRATION_PATH):
         with open(path, "w") as handle:
             json.dump(
                 {
                     "window_quad": self.window_quad.tolist(),
                     "frame_size": list(self.frame_size),
+                    "control_frac": self.control_frac,
+                    "test_frac": self.test_frac,
                 },
                 handle,
                 indent=2,
             )
 
 
-def from_points(points, frame_size):
+def from_points(points, frame_size, control_frac=None, test_frac=None):
     """
     Build a Calibration from four clicked corners in any order.
     """
     quad = strip.order_points(np.asarray(points, dtype=np.float32))
 
-    return Calibration(window_quad=quad, frame_size=tuple(frame_size))
+    return Calibration(
+        window_quad=quad,
+        frame_size=tuple(frame_size),
+        control_frac=control_frac,
+        test_frac=test_frac,
+    )
 
 
 def load(path=CALIBRATION_PATH):
@@ -64,4 +85,6 @@ def load(path=CALIBRATION_PATH):
     return Calibration(
         window_quad=np.asarray(data["window_quad"], dtype=np.float32),
         frame_size=tuple(data["frame_size"]),
+        control_frac=data.get("control_frac"),
+        test_frac=data.get("test_frac"),
     )

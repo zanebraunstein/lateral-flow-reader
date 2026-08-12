@@ -106,14 +106,20 @@ python3 calibrate.py
 ```
 
 Click the four corners of the results window — the bright membrane rectangle
-containing the C and T lines. A live preview shows the warped strip and its
-signal profile with the current corners, and reports the control-line SNR, so
-you can confirm the bands are found before saving. Press `s` to save (`r`
-resets, `q` quits).
+containing the C and T lines. The tool finds the two band positions from the
+cassette itself and labels them from the control side, so **either cassette
+orientation works** (C-left/T-right or the reverse) with no hand-tuned
+constants. Press `f` to flip which side is the control if the labels land
+wrong; a live preview shows the strip and profile with the bands marked and
+reports the control SNR. Press `s` to save (`r` resets, `q` quits).
 
-This writes `calibration.json` (rig-specific, git-ignored). `main.py` then
-picks it up automatically and skips cassette detection entirely. Re-run
-`calibrate.py` whenever the camera or cassette position changes.
+Calibrate with a cassette showing **both** lines (a used positive works well)
+so both band positions can be learned.
+
+This writes `calibration.json` (rig-specific, git-ignored): the window corners
+plus the learned control and test positions. `main.py` picks it up
+automatically and skips cassette detection entirely. Re-run `calibrate.py`
+whenever the camera or cassette position changes.
 
 ## Running a test
 
