@@ -67,7 +67,8 @@ Two properties are load-bearing and worth knowing before changing anything:
 | `viz.py` | display overlays (draws only on copies) |
 | `recorder.py` | per-run capture of profiles and decimated frames |
 | `analysis.py` | offline analysis of a recorded run |
-| `plot.py` | plot a run's density and SNR kinetics |
+| `plot.py` | plot a run's kinetics (matplotlib PNG) |
+| `plot_svg.py` | same plot as SVG, standard library only |
 | `calibration.py` | load/save calibration and learn band positions |
 | `tests/` | pytest suite, runs on a workstation |
 
@@ -194,6 +195,14 @@ in a* area) with time-to-positivity and plateau marked and the fitted rate
 annotated, and **detection SNR** with the threshold lines. Needs matplotlib
 (`pip install -r requirements-dev.txt`); it saves a PNG so it works headless
 over SSH, and can run off-Pi on a copied run directory.
+
+For a Pi with no room to install matplotlib, `plot_svg.py` produces the same
+two panels as an SVG using only the standard library — nothing to install.
+Open the resulting `plot.svg` in a browser.
+
+```sh
+python3 plot_svg.py            # newest run -> plot.svg in it
+```
 
 ## Validity
 
