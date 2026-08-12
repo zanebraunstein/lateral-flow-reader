@@ -62,13 +62,13 @@ Two properties are load-bearing and worth knowing before changing anything:
 
 | file | role |
 |---|---|
-| `main.py` | capture loop, CSV logging, run lifecycle |
+| `main.py` | preview, inline calibration, capture loop, run lifecycle |
 | `strip.py` | cassette geometry and all signal analysis (no camera, no display) |
 | `viz.py` | display overlays (draws only on copies) |
 | `recorder.py` | per-run capture of profiles and decimated frames |
 | `analysis.py` | offline analysis of a recorded run |
-| `calibration.py` | load/save the fixed-rig strip location |
-| `calibrate.py` | one-time interactive calibration tool |
+| `plot.py` | plot a run's density and SNR kinetics |
+| `calibration.py` | load/save calibration and learn band positions |
 | `tests/` | pytest suite, runs on a workstation |
 
 `strip.py`, `viz.py`, `recorder.py`, `analysis.py` and `calibration.py` import
@@ -97,44 +97,43 @@ apt-installed picamera2 will not be visible inside it:
 python3 -m venv --system-site-packages .venv
 ```
 
-## Calibrating a fixed rig
-
-With the camera mounted at a fixed position over the cassette, calibrate once:
-
-```sh
-python3 calibrate.py
-```
-
-Click the four corners of the results window — the bright membrane rectangle
-containing the C and T lines. The tool finds the two band positions from the
-cassette itself and labels them from the control side, so **either cassette
-orientation works** (C-left/T-right or the reverse) with no hand-tuned
-constants. Press `f` to flip which side is the control if the labels land
-wrong; a live preview shows the strip and profile with the bands marked and
-reports the control SNR. Press `s` to save (`r` resets, `q` quits).
-
-Calibrate with a cassette showing **both** lines (a used positive works well)
-so both band positions can be learned.
-
-This writes `calibration.json` (rig-specific, git-ignored): the window corners
-plus the learned control and test positions. `main.py` picks it up
-automatically and skips cassette detection entirely. Re-run `calibrate.py`
-whenever the camera or cassette position changes.
-
 ## Running a test
+
+Everything is one command — calibration, preview, and the run:
 
 ```sh
 python3 main.py
 ```
 
-With a calibration present the reader uses the fixed window immediately; without
-one it falls back to searching for the whole cassette each frame. Live windows
-show the camera view with detected bands projected back onto it, the warped
-window, the strip ROI, and the 1-D signal profile.
+It opens in a **live preview** (not recording), showing the bands overlaid on
+the camera view:
 
-A run stops automatically after `RUN_DURATION_S` (15 minutes) so that runs are
-comparable and the plateau is well defined. `q` stops early; the summary line
-records which happened.
+- **`g`** — start the 15-minute recording run. Press it the moment you apply
+  the sample, so time-to-positivity is measured from the true start.
+- **`c`** — calibrate (see below). Only needed at first setup or if the rig moves.
+- **`q`** — quit without recording.
+
+A run stops automatically after `RUN_DURATION_S` (15 minutes) so runs are
+comparable and the plateau is well defined; `q` during a run stops it early.
+
+### Calibration (one time per rig)
+
+Calibration is a **setup step, not per-test** — once the camera and cassette
+position are fixed, the saved calibration is reused for every test of that
+cassette design. Press `c` in the preview with a reference cassette showing
+**both** lines (a used positive works well), then click the four corners of the
+results window — the bright membrane rectangle containing the C and T lines.
+
+The tool finds the two band positions from the cassette itself and labels them
+from the control side, so **either cassette orientation works** (C-left/T-right
+or the reverse) with no hand-tuned constants. Press `f` to flip which side is
+the control if the labels land wrong; a preview shows the strip and profile with
+the bands marked and reports the control SNR. Press `s` to save, `q` to cancel.
+
+This writes `calibration.json` (rig-specific, git-ignored): the window corners
+plus the learned control and test positions, loaded automatically on the next
+run. With no calibration, `g` records using full-cassette detection instead
+(needs the whole cassette in frame).
 
 Each run writes to its own timestamped directory — restarting the reader never
 overwrites previous data:
@@ -180,6 +179,21 @@ first detection in the window that satisfied the vote threshold, since the
 latch necessarily fires later than the line appears — `confirmed` is when it
 latched. And the rate comes with an R²: a low value means a single slope is a
 poor description of the rise, which is normal for a saturating curve.
+
+### Plotting a run
+
+```sh
+python3 plot.py                        # newest run -> writes plot.png into it
+python3 plot.py runs/20260812-113353
+python3 plot.py --show                 # open a window too
+python3 plot.py --test-snr 8           # re-score threshold before plotting
+```
+
+Two stacked panels over a shared time axis: **band density** (test and control
+in a* area) with time-to-positivity and plateau marked and the fitted rate
+annotated, and **detection SNR** with the threshold lines. Needs matplotlib
+(`pip install -r requirements-dev.txt`); it saves a PNG so it works headless
+over SSH, and can run off-Pi on a copied run directory.
 
 ## Validity
 

@@ -14,6 +14,49 @@ EXPECTED_WINDOWS = [
 ]
 
 
+def _readout_colors(disp):
+    """Colours present in the two-line readout region (top-left)."""
+    region = disp[65:135, :700]
+
+    def has(color):
+        return bool(np.any(np.all(region == color, axis=2)))
+
+    return {
+        "valid": has(viz.COLOR_CONTROL),
+        "waiting": has(viz.COLOR_SEARCHING),
+        "positive": has(viz.COLOR_TEST),
+    }
+
+
+def _render(stable_test, stable_control):
+    frame = synth.cassette_frame(t_amp=50, c_amp=70)
+    result = strip.analyze(frame)
+    return viz.render(frame, result, stable_test, stable_control)["Lateral Flow Reader"]
+
+
+def test_readout_shows_waiting_until_control_is_stable():
+    colors = _readout_colors(_render(stable_test=False, stable_control=False))
+
+    assert colors["waiting"]
+    assert not colors["valid"]
+    assert not colors["positive"]
+
+
+def test_readout_shows_valid_but_not_positive_for_a_negative():
+    colors = _readout_colors(_render(stable_test=False, stable_control=True))
+
+    assert colors["valid"]
+    assert not colors["waiting"]
+    assert not colors["positive"]
+
+
+def test_readout_shows_positive_only_when_test_is_stable():
+    colors = _readout_colors(_render(stable_test=True, stable_control=True))
+
+    assert colors["valid"]
+    assert colors["positive"]
+
+
 def test_render_produces_every_window():
     frame = synth.cassette_frame(t_amp=50)
 

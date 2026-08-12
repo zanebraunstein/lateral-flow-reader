@@ -58,6 +58,32 @@ class Calibration:
             )
 
 
+def learn_bands(profile, candidates, control_side):
+    """
+    Locate the two bands in a profile and assign control/test by which side
+    the control is on. Returns (control_frac, test_frac) as strip fractions;
+    either may be None if fewer than two bands are present.
+
+    This is what lets calibration handle either cassette orientation without
+    hand-tuned positions.
+    """
+    n = len(profile)
+    found = strip.dominant_two_bands(profile, candidates)
+
+    if len(found) == 2:
+        left, right = found
+        control_idx, test_idx = (left, right) if control_side == "left" else (right, left)
+    elif len(found) == 1:
+        control_idx, test_idx = found[0], None
+    else:
+        control_idx, test_idx = None, None
+
+    control_frac = None if control_idx is None else control_idx / n
+    test_frac = None if test_idx is None else test_idx / n
+
+    return control_frac, test_frac
+
+
 def from_points(points, frame_size, control_frac=None, test_frac=None):
     """
     Build a Calibration from four clicked corners in any order.

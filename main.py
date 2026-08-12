@@ -3,6 +3,7 @@ import os
 import time
 
 import cv2 as cv
+import numpy as np
 from picamera2 import Picamera2
 from libcamera import controls
 
@@ -13,6 +14,9 @@ import viz
 
 
 CSV_NAME = "signal_log.csv"
+
+FONT = cv.FONT_HERSHEY_SIMPLEX
+CALIBRATE_WINDOW = "Calibrate - click 4 corners of the results window"
 
 # A lateral flow result is read at a fixed time point; stopping on a keypress
 # makes runs incomparable and leaves the plateau undefined.
@@ -85,27 +89,154 @@ def csv_row(elapsed, result, stability):
     ]
 
 
-def main():
-    calibration = calib.load()
+def grab_frame(picam2):
+    return cv.cvtColor(picam2.capture_array(), cv.COLOR_RGB2BGR)
 
-    if calibration is not None:
-        window_quad = calibration.window_quad
-        bands = calibration.bands
-        print("Using fixed-rig calibration from", calib.CALIBRATION_PATH)
-    else:
-        window_quad = None
-        bands = None
-        print(
-            "No calibration found -- falling back to full-cassette detection.\n"
-            "For a fixed rig, run 'python3 calibrate.py' once to mark the "
-            "results window."
-        )
 
-    run_dir = recorder.create_run_dir()
-    print("Recording run to", run_dir)
+def run_calibration_ui(picam2):
+    """
+    Interactive corner clicking on the live camera. Returns a Calibration, or
+    None if cancelled. Band positions are learned from the cassette and
+    labelled by the control side; press 'f' to flip it.
+    """
+    points = []
+    control_side = "left"
 
-    picam2 = start_camera()
+    def on_mouse(event, x, y, flags, param):
+        if event == cv.EVENT_LBUTTONDOWN and len(points) < 4:
+            points.append((x, y))
 
+    cv.namedWindow(CALIBRATE_WINDOW)
+    cv.setMouseCallback(CALIBRATE_WINDOW, on_mouse)
+
+    try:
+        while True:
+            frame = grab_frame(picam2)
+            disp = frame.copy()
+
+            for i, point in enumerate(points):
+                cv.circle(disp, point, 6, viz.COLOR_CONTROL, -1)
+                cv.putText(disp, str(i + 1), (point[0] + 8, point[1] - 8),
+                           FONT, 0.7, viz.COLOR_CONTROL, 2)
+
+            if len(points) >= 2:
+                cv.polylines(disp, [np.array(points, np.int32)],
+                             len(points) == 4, viz.COLOR_CANDIDATE, 2)
+
+            cv.putText(
+                disp,
+                f"Corners {len(points)}/4   control={control_side}   "
+                f"f=flip  s=save  r=reset  q=cancel",
+                (20, 30), FONT, 0.65, viz.COLOR_TEXT, 2
+            )
+
+            control_frac = test_frac = None
+
+            if len(points) == 4:
+                quad = strip.order_points(np.array(points, dtype=np.float32))
+                probe = strip.analyze(frame, window_quad=quad)
+
+                if probe is not None:
+                    control_frac, test_frac = calib.learn_bands(
+                        probe.profile, probe.candidates, control_side
+                    )
+
+                    result = strip.analyze(
+                        frame, window_quad=quad, bands=(test_frac, control_frac)
+                    )
+                    previews = viz.render(frame, result)
+                    cv.imshow("Strip preview", previews["Strip ROI"])
+                    cv.imshow("Profile preview", previews["Signal Profile"])
+
+                    ok = (
+                        control_frac is not None
+                        and result.control.snr >= strip.CONTROL_SNR_THRESHOLD
+                    )
+                    if control_frac is None:
+                        note = "no bands found - check corners/lighting"
+                    elif test_frac is None:
+                        note = "only one line - calibrate with both lines showing"
+                    else:
+                        note = f"control SNR {result.control.snr:.1f} {'OK' if ok else 'LOW'}"
+
+                    cv.putText(disp, note, (20, 60), FONT, 0.7,
+                               viz.COLOR_CONTROL if ok else viz.COLOR_SEARCHING, 2)
+
+            cv.imshow(CALIBRATE_WINDOW, disp)
+
+            key = cv.waitKey(1) & 0xFF
+
+            if key == ord("q"):
+                return None
+            elif key == ord("r"):
+                points = []
+            elif key == ord("f"):
+                control_side = "right" if control_side == "left" else "left"
+            elif key == ord("s") and len(points) == 4:
+                if control_frac is None or test_frac is None:
+                    print("Both bands must be found before saving "
+                          "(use a cassette showing both lines).")
+                    continue
+
+                h, w = frame.shape[:2]
+                calibration = calib.from_points(
+                    points, (w, h),
+                    control_frac=control_frac, test_frac=test_frac
+                )
+                print(f"Calibrated: control@{control_frac:.2f} test@{test_frac:.2f} "
+                      f"(control on {control_side})")
+                return calibration
+
+    finally:
+        cv.destroyWindow(CALIBRATE_WINDOW)
+        for extra in ("Strip preview", "Profile preview"):
+            try:
+                cv.destroyWindow(extra)
+            except cv.error:
+                pass
+
+
+def preview_loop(picam2, calibration):
+    """
+    Live preview before recording. The user starts the run with 'g' (so the
+    clock starts when the sample is applied), calibrates with 'c', or quits
+    with 'q'. Returns (calibration, start) where start is True to record.
+    """
+    while True:
+        frame = grab_frame(picam2)
+
+        window_quad = calibration.window_quad if calibration else None
+        bands = calibration.bands if calibration else None
+
+        result = strip.analyze(frame, window_quad, bands)
+        windows = viz.render(frame, result)
+
+        disp = windows["Lateral Flow Reader"]
+        state = "calibrated" if calibration else "NO calibration (press c)"
+        cv.putText(disp, f"PREVIEW [{state}]   g=start run  c=calibrate  q=quit",
+                   (20, 210), FONT, 0.7, viz.COLOR_TEXT, 2)
+
+        for name, image in windows.items():
+            cv.imshow(name, image)
+
+        key = cv.waitKey(1) & 0xFF
+
+        if key == ord("q"):
+            return calibration, False
+        elif key == ord("g"):
+            return calibration, True
+        elif key == ord("c"):
+            new = run_calibration_ui(picam2)
+            if new is not None:
+                new.save()
+                calibration = new
+                print("Saved calibration to", calib.CALIBRATION_PATH)
+
+
+def record_run(picam2, run_dir, window_quad, bands):
+    """
+    The timed recording run. Stops after RUN_DURATION_S or on 'q'.
+    """
     start_time = time.time()
 
     csv_file = open(os.path.join(run_dir, CSV_NAME), "w", newline="")
@@ -125,10 +256,7 @@ def main():
                 stopped = f"completed ({RUN_DURATION_S / 60:.0f} min)"
                 break
 
-            frame = cv.cvtColor(
-                picam2.capture_array(),
-                cv.COLOR_RGB2BGR
-            )
+            frame = grab_frame(picam2)
 
             result = strip.analyze(frame, window_quad, bands)
 
@@ -164,10 +292,39 @@ def main():
             print("Failed to write profiles.npz:", e)
 
         csv_file.close()
-        cv.destroyAllWindows()
-        picam2.stop()
 
         print(f"Run {stopped}: {run.summary()}")
+
+
+def main():
+    picam2 = start_camera()
+
+    try:
+        calibration = calib.load()
+
+        if calibration is not None:
+            print("Loaded calibration from", calib.CALIBRATION_PATH)
+        else:
+            print("No calibration yet -- press 'c' in the preview to calibrate, "
+                  "or 'g' to run with full-cassette detection.")
+
+        calibration, start = preview_loop(picam2, calibration)
+
+        if not start:
+            print("Quit before starting a run.")
+            return
+
+        window_quad = calibration.window_quad if calibration else None
+        bands = calibration.bands if calibration else None
+
+        run_dir = recorder.create_run_dir()
+        print("Recording run to", run_dir)
+
+        record_run(picam2, run_dir, window_quad, bands)
+
+    finally:
+        cv.destroyAllWindows()
+        picam2.stop()
 
 
 if __name__ == "__main__":

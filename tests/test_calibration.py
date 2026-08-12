@@ -79,19 +79,17 @@ def test_learn_bands_assigns_by_control_side():
     The same two bands must map to opposite roles depending on which side the
     control is on -- this is what makes either cassette orientation work.
     """
-    import calibrate
-
     # Strong band left (0.20), weaker band right (0.80)
     frame, quad = synth.window_scene_at(
         control_frac=0.20, test_frac=0.80, control_amp=75, test_amp=45
     )
     probe = strip.analyze(frame, window_quad=quad)
 
-    control_frac, test_frac = calibrate.learn_bands(probe, "left")
+    control_frac, test_frac = calib.learn_bands(probe.profile, probe.candidates, "left")
     assert control_frac == pytest.approx(0.20, abs=0.05)
     assert test_frac == pytest.approx(0.80, abs=0.05)
 
-    control_frac, test_frac = calibrate.learn_bands(probe, "right")
+    control_frac, test_frac = calib.learn_bands(probe.profile, probe.candidates, "right")
     assert control_frac == pytest.approx(0.80, abs=0.05)
     assert test_frac == pytest.approx(0.20, abs=0.05)
 

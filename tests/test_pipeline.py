@@ -12,12 +12,24 @@ import synth
 
 
 def run_loop(monkeypatch, tmp_path, fake_camera, frames, duration=1.5, **recorder_kwargs):
+    import cv2 as cv
+
     import main
 
     fake_camera.frames = frames
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(main, "RUN_DURATION_S", duration)
+
+    # Leave the preview phase immediately with 'g', then let the timed run end
+    # itself (0xFF is "no key").
+    calls = {"n": 0}
+
+    def wait_key(delay):
+        calls["n"] += 1
+        return ord("g") if calls["n"] == 1 else 0xFF
+
+    monkeypatch.setattr(cv, "waitKey", wait_key)
 
     if recorder_kwargs:
         monkeypatch.setattr(
@@ -105,6 +117,40 @@ def test_run_without_a_cassette_records_nothing(monkeypatch, tmp_path, fake_came
 
     assert rows == []
     assert not os.path.exists(os.path.join(run_dir, "profiles.npz"))
+
+
+def test_quit_from_preview_starts_no_run(monkeypatch, tmp_path, fake_camera, headless):
+    """
+    Pressing 'q' in the preview must not create a run directory or record.
+    """
+    import cv2 as cv
+    import main
+
+    fake_camera.frames = developing_run(n=5)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cv, "waitKey", lambda delay: ord("q"))
+
+    main.main()
+
+    assert not os.path.isdir("runs") or os.listdir("runs") == []
+
+
+def test_camera_is_released_after_a_normal_run(monkeypatch, tmp_path, fake_camera, headless):
+    """
+    The preview -> record -> cleanup path releases the camera when done.
+    """
+    import main
+
+    cameras = []
+    original = main.start_camera
+    monkeypatch.setattr(
+        main, "start_camera",
+        lambda: cameras.append(original()) or cameras[-1]
+    )
+
+    run_loop(monkeypatch, tmp_path, fake_camera, developing_run(), duration=0.5)
+
+    assert cameras and cameras[0].stopped
 
 
 def test_camera_is_released_when_the_loop_raises(monkeypatch, tmp_path, fake_camera, headless):

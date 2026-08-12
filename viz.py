@@ -172,68 +172,30 @@ def draw_searching(disp):
     cv.putText(disp, "Searching...", (20, 40), FONT, 1.0, COLOR_SEARCHING, 2)
 
 
-def draw_readout(
-    disp,
-    t_strength,
-    c_strength,
-    tc_ratio,
-    t_snr,
-    c_snr,
-    test_present,
-    control_present,
-    stable_test,
-    stable_control
-):
+def draw_readout(disp, tc_ratio, t_snr, c_snr, stable_test, stable_control):
     """
-    Numeric readout and detection state, drawn every frame a cassette is seen.
+    Two-line verdict, using the debounced (stable) detections. The control line
+    reports validity; the test line reports the result. SNRs are shown as a
+    confidence hint; the full per-frame numbers live in the CSV.
     """
-    def yes_no(flag):
-        return "YES" if flag else "NO"
+    # Control = validity
+    if stable_control:
+        control_text, control_color = f"Control: VALID   (SNR {c_snr:.1f})", COLOR_CONTROL
+    else:
+        control_text, control_color = f"Control: waiting   (SNR {c_snr:.1f})", COLOR_SEARCHING
 
-    cv.putText(
-        disp,
-        f"T={t_strength:.2f}  C={c_strength:.2f}  T/C={tc_ratio:.2f}",
-        (20, 80),
-        FONT,
-        0.7,
-        COLOR_TEXT,
-        2
-    )
+    cv.putText(disp, control_text, (20, 85), FONT, 0.8, control_color, 2)
 
-    cv.putText(
-        disp,
-        (
-            f"T SNR={t_snr:.1f}  "
-            f"C SNR={c_snr:.1f}  "
-            f"C={yes_no(control_present)}  "
-            f"T={yes_no(test_present)}"
-        ),
-        (20, 110),
-        FONT,
-        0.65,
-        COLOR_TEXT,
-        2
-    )
+    # Test = result, only meaningful once the control is valid
+    if not stable_control:
+        test_text, test_color = "Test: --", COLOR_TEXT
+    elif stable_test:
+        test_text = f"Test: POSITIVE   T/C={tc_ratio:.2f}   (SNR {t_snr:.1f})"
+        test_color = COLOR_TEST
+    else:
+        test_text, test_color = "Test: negative", COLOR_TEXT
 
-    cv.putText(
-        disp,
-        f"Stable Control: {yes_no(stable_control)}",
-        (20, 140),
-        FONT,
-        0.6,
-        COLOR_CONTROL,
-        2
-    )
-
-    cv.putText(
-        disp,
-        f"Stable Test: {yes_no(stable_test)}",
-        (20, 170),
-        FONT,
-        0.6,
-        COLOR_TEST,
-        2
-    )
+    cv.putText(disp, test_text, (20, 120), FONT, 0.8, test_color, 2)
 
 
 def render(frame, result, stable_test=False, stable_control=False):
@@ -278,13 +240,9 @@ def render(frame, result, stable_test=False, stable_control=False):
 
     draw_readout(
         disp,
-        result.test.strength,
-        result.control.strength,
         result.tc_ratio,
         result.test.snr,
         result.control.snr,
-        result.test.present,
-        result.control.present,
         stable_test,
         stable_control
     )
