@@ -1,4 +1,5 @@
 import csv
+import errno
 import os
 import time
 
@@ -274,10 +275,20 @@ def record_run(picam2, run_dir, window_quad, bands):
             if result is not None:
                 stability.update(result)
 
-                writer.writerow(csv_row(elapsed, result, stability))
-
-                # A run lasts minutes; never lose it to an unclean exit
-                csv_file.flush()
+                try:
+                    writer.writerow(csv_row(elapsed, result, stability))
+                    # A run lasts minutes; never lose it to an unclean exit
+                    csv_file.flush()
+                except OSError as e:
+                    reason = "disk full" if e.errno == errno.ENOSPC else f"write error ({e})"
+                    stopped = f"stopped: {reason} at {elapsed / 60:.1f} min"
+                    print("\n" + "!" * 56)
+                    print(f"  RECORDING STOPPED - {reason}")
+                    print(f"  Data saved up to {elapsed / 60:.1f} min.")
+                    if e.errno == errno.ENOSPC:
+                        print("  Free space: 'df -h /', delete old runs/, then re-run.")
+                    print("!" * 56 + "\n")
+                    break
 
                 run.add(elapsed, result)
 

@@ -36,7 +36,9 @@ STRIP_Y1_FRAC = 0.66
 STRIP_X0_FRAC = 0.30
 STRIP_X1_FRAC = 0.82
 
-EDGE_EXCLUDE_FRAC = 0.12
+# Small: a band can sit near the edge of the strip (e.g. a control line close
+# to the window edge), so only the very rim is excluded as warp artifact.
+EDGE_EXCLUDE_FRAC = 0.05
 MIN_BAND_WIDTH = 6
 MAX_BAND_WIDTH = 45
 

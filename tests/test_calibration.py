@@ -196,6 +196,22 @@ def test_learn_bands_assigns_by_control_side():
     assert test_frac == pytest.approx(0.20, abs=0.05)
 
 
+def test_learn_bands_finds_a_band_near_the_strip_edge():
+    """
+    A control line close to the window edge (as on a pregnancy cassette) must
+    still be found -- it was being dropped by an over-aggressive edge exclusion.
+    """
+    n = 200
+    xs = np.arange(n)
+    prof = 5.0 * np.exp(-((xs - 16) / 4.0) ** 2)       # control near left edge (~0.08)
+    prof += 3.0 * np.exp(-((xs - 150) / 4.0) ** 2)     # test on the right
+
+    control_frac, test_frac = calib.learn_bands(prof, "left")
+
+    assert control_frac == pytest.approx(16 / n, abs=0.03)
+    assert test_frac == pytest.approx(150 / n, abs=0.03)
+
+
 def test_learn_bands_finds_a_broad_band_the_width_filter_drops():
     """
     Calibration must learn a broad band's position, even though it would be
