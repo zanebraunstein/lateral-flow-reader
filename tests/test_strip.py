@@ -36,6 +36,23 @@ def test_blank_strip_finds_nothing():
     assert c_idx is None
 
 
+def test_snr_excludes_the_other_band_from_noise():
+    """
+    Two strong bands: counting one as noise deflates the other's SNR, so
+    excluding it must raise the SNR. This is what lets both bands of a strong
+    positive clear the detection threshold.
+    """
+    n = 200
+    xs = np.arange(n)
+    prof = 6.0 * np.exp(-((xs - 60) / 12.0) ** 2)
+    prof += 5.0 * np.exp(-((xs - 140) / 12.0) ** 2)
+
+    including = strip.band_signal_snr(prof, 60)[1]
+    excluding = strip.band_signal_snr(prof, 60, exclude=(140,))[1]
+
+    assert excluding > including
+
+
 def test_snr_is_zero_for_missing_band():
     profile = strip.redness_profile(synth.strip_image([]))
 
@@ -84,9 +101,10 @@ def test_analyze_matches_hand_composed_primitives(amp):
     assert result.candidates == candidates
     assert result.test.idx == t_idx
     assert result.control.idx == c_idx
-    assert result.test.snr == strip.band_signal_snr(profile, t_idx)[1]
-    assert result.test.area == strip.band_area(raw, t_idx)
-    assert result.test.peak_a == strip.band_peak_height(raw, t_idx)
+    # each band excludes the other from its noise/baseline
+    assert result.test.snr == strip.band_signal_snr(profile, t_idx, exclude=(c_idx,))[1]
+    assert result.test.area == strip.band_area(raw, t_idx, exclude=(c_idx,))
+    assert result.test.peak_a == strip.band_peak_height(raw, t_idx, exclude=(c_idx,))
 
 
 def test_analyze_returns_none_without_cassette():

@@ -54,9 +54,12 @@ EXPECTED_T_FRAC = 0.45
 SEARCH_RADIUS_FRAC = 0.18
 MIN_TC_SEPARATION_FRAC = 0.18
 
-# Band is called present above this SNR; test also requires a valid control
-CONTROL_SNR_THRESHOLD = 6.0
-TEST_SNR_THRESHOLD = 5.0
+# Detection sensitivity: a band counts as present above this SNR (test also
+# requires a valid control). LOWER = more sensitive (catches fainter lines but
+# risks noise); raise if it starts calling blanks positive. Check a run's real
+# SNR with diagnose.py and set these just below what your true lines produce.
+CONTROL_SNR_THRESHOLD = 4.5
+TEST_SNR_THRESHOLD = 4.0
 
 # A detection must hold for STABILITY_VOTES of the last STABILITY_WINDOW frames
 STABILITY_WINDOW = 10
@@ -452,18 +455,25 @@ def pick_t_c_from_peaks(
     return t_idx, c_idx
 
 
-def band_background(profile, idx, half_width=6):
+def band_background(profile, idx, half_width=6, exclude=()):
     """
     Profile samples far enough from the band at `idx` to estimate the local
     baseline and noise without the band contaminating them.
+
+    `exclude` lists other band positions to also mask out -- otherwise a second
+    band counts as "noise" and inflates the estimate, deflating this band's SNR.
     """
     n = len(profile)
 
     mask = np.ones(n, dtype=bool)
-    mask[
-        max(0, idx - 3 * half_width):
-        min(n, idx + 3 * half_width + 1)
-    ] = False
+
+    for centre in (idx,) + tuple(exclude):
+        if centre is None:
+            continue
+        mask[
+            max(0, centre - 3 * half_width):
+            min(n, centre + 3 * half_width + 1)
+        ] = False
 
     background = profile[mask]
 
@@ -473,7 +483,7 @@ def band_background(profile, idx, half_width=6):
     return background
 
 
-def band_peak_height(profile, idx, half_width=6):
+def band_peak_height(profile, idx, half_width=6, exclude=()):
     """
     Peak height above the local baseline, in whatever units `profile` carries.
     """
@@ -486,12 +496,12 @@ def band_peak_height(profile, idx, half_width=6):
     hi = min(n, idx + half_width + 1)
 
     peak = float(np.max(profile[lo:hi]))
-    baseline = float(np.median(band_background(profile, idx, half_width)))
+    baseline = float(np.median(band_background(profile, idx, half_width, exclude)))
 
     return peak - baseline
 
 
-def band_area(profile, idx, half_width=6, frac=0.5):
+def band_area(profile, idx, half_width=6, frac=0.5, exclude=()):
     """
     Integrated signal above the local baseline across the band.
 
@@ -503,7 +513,7 @@ def band_area(profile, idx, half_width=6, frac=0.5):
     if idx is None:
         return 0.0
 
-    baseline = float(np.median(band_background(profile, idx, half_width)))
+    baseline = float(np.median(band_background(profile, idx, half_width, exclude)))
 
     left, right = band_extent(profile, idx, frac)
 
@@ -513,18 +523,19 @@ def band_area(profile, idx, half_width=6, frac=0.5):
     return float(np.sum(np.clip(segment, 0.0, None)))
 
 
-def band_signal_snr(profile, idx, half_width=6):
+def band_signal_snr(profile, idx, half_width=6, exclude=()):
     """
-    Return band strength and signal-to-noise ratio.
+    Return band strength and signal-to-noise ratio. `exclude` masks other bands
+    out of the noise estimate so they do not deflate this band's SNR.
     """
     if idx is None:
         return 0.0, 0.0
 
-    background = band_background(profile, idx, half_width)
+    background = band_background(profile, idx, half_width, exclude)
 
     baseline = float(np.median(background))
 
-    strength = band_peak_height(profile, idx, half_width)
+    strength = band_peak_height(profile, idx, half_width, exclude)
 
     # Robust noise estimate
     noise = float(
@@ -639,14 +650,16 @@ def _measure_strip(results_window, warped, quad, window_bounds, strip_rect, band
     else:
         t_idx, c_idx = pick_t_c_from_peaks(profile, candidates, test_frac, control_frac)
 
-    t_strength, t_snr = band_signal_snr(profile, t_idx)
-    c_strength, c_snr = band_signal_snr(profile, c_idx)
+    # Each band excludes the other from its noise/baseline, so two strong bands
+    # do not deflate each other's SNR.
+    t_strength, t_snr = band_signal_snr(profile, t_idx, exclude=(c_idx,))
+    c_strength, c_snr = band_signal_snr(profile, c_idx, exclude=(t_idx,))
 
-    t_area = band_area(raw_profile, t_idx)
-    c_area = band_area(raw_profile, c_idx)
+    t_area = band_area(raw_profile, t_idx, exclude=(c_idx,))
+    c_area = band_area(raw_profile, c_idx, exclude=(t_idx,))
 
-    t_peak_a = band_peak_height(raw_profile, t_idx)
-    c_peak_a = band_peak_height(raw_profile, c_idx)
+    t_peak_a = band_peak_height(raw_profile, t_idx, exclude=(c_idx,))
+    c_peak_a = band_peak_height(raw_profile, c_idx, exclude=(t_idx,))
 
     control_present = c_snr >= CONTROL_SNR_THRESHOLD
     test_present = t_snr >= TEST_SNR_THRESHOLD and control_present

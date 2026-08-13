@@ -57,8 +57,12 @@ def test_raw_profiles_recovers_physical_units(tmp_path):
 
     assert np.allclose(raw[0], result.raw_profile, rtol=1e-5, atol=1e-4)
 
-    # and the recovered profile must reproduce the recorded density
-    area = strip.band_area(raw[0].astype(np.float64), int(data["test_idx"][0]))
+    # and the recovered profile must reproduce the recorded density (which
+    # excludes the control band from the test band's baseline)
+    area = strip.band_area(
+        raw[0].astype(np.float64), int(data["test_idx"][0]),
+        exclude=(int(data["control_idx"][0]),)
+    )
 
     assert abs(area - data["test_area"][0]) < 1e-3
 
