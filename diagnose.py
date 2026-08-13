@@ -1,25 +1,30 @@
 import time
-import calibration as calib
-import strip
-import main
+import numpy as np
+import cv2 as cv
+import calibration as calib, strip, main
 
 picam2 = main.start_camera()
-time.sleep(1.0)
+time.sleep(1.5)
 cal = calib.load()
-frame = main.grab_frame(picam2)
+
+N, cdet, tdet = 30, 0, 0
+csn, tsn, sc, last = [], [], [], None
+for _ in range(N):
+    last = main.grab_frame(picam2)
+    r = strip.analyze(last, cal.window_quad, cal.bands)
+    cdet += r.control.idx is not None
+    tdet += r.test.idx is not None
+    csn.append(r.control.snr); tsn.append(r.test.snr); sc.append(r.scale)
+    time.sleep(0.15)
 picam2.stop()
 
-r = strip.analyze(frame, cal.window_quad, cal.bands)
-n = len(r.profile)
-frac = lambda i: None if i is None else round(i / n, 3)
+print("control detected %d/%d  snr mean %.1f max %.1f" % (cdet, N, sum(csn)/N, max(csn)))
+print("test    detected %d/%d  snr mean %.1f max %.1f" % (tdet, N, sum(tsn)/N, max(tsn)))
+print("profile scale mean %.2f" % (sum(sc)/N))
 
-print("calibration: control_frac=%.3f test_frac=%.3f" % (cal.control_frac, cal.test_frac))
-print("candidates (position, height, width):")
-for c in r.candidates:
-    print("   frac=%.3f  height=%.2f  width=%d"
-          % (c / n, float(r.profile[c]), strip.band_width_peak(r.profile, c)))
-print("CONTROL detected at frac=%s  snr=%.1f" % (frac(r.control.idx), r.control.snr))
-print("TEST    detected at frac=%s  snr=%.1f" % (frac(r.test.idx), r.test.snr))
-print("limits: MIN_W=%d MAX_W=%d edge=%.2f radius=%.2f"
-      % (strip.MIN_BAND_WIDTH, strip.MAX_BAND_WIDTH,
-         strip.EDGE_EXCLUDE_FRAC, strip.SEARCH_RADIUS_FRAC))
+warped = strip.warp_quad(last, np.asarray(cal.window_quad, np.float32),
+                         strip.WINDOW_CANON_W, strip.WINDOW_CANON_H)
+roi = strip.extract_strip_roi(warped)
+gray = cv.cvtColor(roi, cv.COLOR_BGR2GRAY)
+print("strip brightness: mean %.0f max %d   pct>250: %.1f%%"
+      % (gray.mean(), gray.max(), 100 * (gray > 250).mean()))
