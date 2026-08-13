@@ -36,6 +36,13 @@ STRIP_Y1_FRAC = 0.66
 STRIP_X0_FRAC = 0.30
 STRIP_X1_FRAC = 0.82
 
+# Calibrated path: symmetric margin trimmed off each side of the marked box, to
+# keep its border edges out of the analysed strip while staying centred.
+# Larger = cleaner detection (further from the box edges); smaller = the
+# analysed strip fills more of the box. Tune if detection is edgy or the box
+# feels too cropped.
+CAL_STRIP_MARGIN_FRAC = 0.15
+
 # Small: a band can sit near the edge of the strip (e.g. a control line close
 # to the window edge), so only the very rim is excluded as warp artifact.
 EDGE_EXCLUDE_FRAC = 0.05
@@ -168,13 +175,18 @@ def strip_bounds(results_window):
 
 def calibrated_strip_bounds(results_window):
     """
-    Strip rectangle for the calibrated path: the FULL width of the box the user
-    marked, trimmed vertically to the band row. What you calibrate is what gets
-    analysed, so the analysed region lines up with the calibration box.
+    Strip rectangle for the calibrated path: most of the marked box, trimmed by
+    a small SYMMETRIC margin on each side and to the band row vertically.
+
+    The margin keeps the box's edges -- the membrane/plastic border, which
+    creates sharp transitions that inflate the noise floor and spawn spurious
+    peaks -- out of the analysed region. Being symmetric, the analysed strip
+    stays centred under the calibration box.
     """
     h, w = results_window.shape[:2]
+    margin = int(CAL_STRIP_MARGIN_FRAC * w)
 
-    return (0, int(STRIP_Y0_FRAC * h), w, int(STRIP_Y1_FRAC * h))
+    return (margin, int(STRIP_Y0_FRAC * h), w - margin, int(STRIP_Y1_FRAC * h))
 
 
 def extract_strip_roi(results_window):
