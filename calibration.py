@@ -58,17 +58,20 @@ class Calibration:
             )
 
 
-def learn_bands(profile, candidates, control_side):
+def learn_bands(profile, control_side):
     """
     Locate the two bands in a profile and assign control/test by which side
     the control is on. Returns (control_frac, test_frac) as strip fractions;
     either may be None if fewer than two bands are present.
 
-    This is what lets calibration handle either cassette orientation without
+    Uses raw peaks (not the width-filtered candidates), so a broad band is
+    still found -- the same reason detection snaps to peaks at runtime. This
+    is what lets calibration handle either cassette orientation without
     hand-tuned positions.
     """
     n = len(profile)
-    found = strip.dominant_two_bands(profile, candidates)
+    peaks = strip.find_peak_candidates(profile)
+    found = strip.dominant_two_bands(profile, peaks)
 
     if len(found) == 2:
         left, right = found

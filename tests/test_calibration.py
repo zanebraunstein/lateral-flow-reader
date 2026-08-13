@@ -92,6 +92,13 @@ def test_snap_to_peak_returns_none_on_a_flat_region():
     assert strip.snap_to_peak(np.zeros(200), 0.5, 0.1) is None
 
 
+@pytest.mark.parametrize("expected_frac", [0.0, 0.02, 0.5, 0.98, 1.0])
+def test_snap_to_peak_handles_positions_at_the_edges(expected_frac):
+    """A window running off either end must not index out of bounds."""
+    prof = np.random.default_rng(0).normal(0, 1, 178)
+    strip.snap_to_peak(prof, expected_frac, 0.18)     # must not raise
+
+
 def test_snap_t_c_skips_a_missing_test_position():
     xs = np.arange(200)
     prof = 5.0 * np.exp(-((xs - 150) / 5.0) ** 2)
@@ -180,13 +187,33 @@ def test_learn_bands_assigns_by_control_side():
     )
     probe = strip.analyze(frame, window_quad=quad)
 
-    control_frac, test_frac = calib.learn_bands(probe.profile, probe.candidates, "left")
+    control_frac, test_frac = calib.learn_bands(probe.profile, "left")
     assert control_frac == pytest.approx(0.20, abs=0.05)
     assert test_frac == pytest.approx(0.80, abs=0.05)
 
-    control_frac, test_frac = calib.learn_bands(probe.profile, probe.candidates, "right")
+    control_frac, test_frac = calib.learn_bands(probe.profile, "right")
     assert control_frac == pytest.approx(0.80, abs=0.05)
     assert test_frac == pytest.approx(0.20, abs=0.05)
+
+
+def test_learn_bands_finds_a_broad_band_the_width_filter_drops():
+    """
+    Calibration must learn a broad band's position, even though it would be
+    dropped from the width-filtered candidate list -- the bug behind the left
+    line landing between the peaks.
+    """
+    n = 200
+    xs = np.arange(n)
+    prof = 4.0 * np.exp(-((xs - 150) / 4.0) ** 2)      # narrow control, right
+    prof += 3.0 * np.exp(-((xs - 50) / 30.0) ** 2)     # broad test, left (width > MAX)
+
+    # the broad left band is absent from the width-filtered candidates
+    assert all(abs(c - 50) > 8 for c in strip.filter_band_candidates(prof))
+
+    control_frac, test_frac = calib.learn_bands(prof, "right")
+
+    assert control_frac == pytest.approx(150 / n, abs=0.03)
+    assert test_frac == pytest.approx(50 / n, abs=0.03)
 
 
 def test_dominant_two_bands_respects_separation():

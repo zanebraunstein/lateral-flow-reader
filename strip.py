@@ -328,8 +328,9 @@ def snap_to_peak(profile, expected_frac, radius_frac):
     expected = int(expected_frac * n)
     radius = int(radius_frac * n)
 
+    # i-1 and i+1 are read below, so keep i within [1, n-2]
     lo = max(1, expected - radius)
-    hi = min(n - 1, expected + radius)
+    hi = min(n - 2, expected + radius)
 
     best = None
     best_height = -1e18

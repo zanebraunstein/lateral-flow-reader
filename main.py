@@ -149,7 +149,7 @@ def run_calibration_ui(picam2):
 
                 if probe is not None:
                     control_frac, test_frac = calib.learn_bands(
-                        probe.profile, probe.candidates, control_side
+                        probe.profile, control_side
                     )
 
                     result = strip.analyze(
