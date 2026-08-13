@@ -15,6 +15,11 @@ import viz
 
 CSV_NAME = "signal_log.csv"
 
+# Auto-exposure bias, in stops. The a* (redness) signal collapses when the
+# strip is over-exposed toward white, so bias exposure down. More negative =
+# darker. Tune with diagnose.py until strip brightness is ~130-150.
+EXPOSURE_VALUE = -1.0
+
 FONT = cv.FONT_HERSHEY_SIMPLEX
 CALIBRATE_WINDOW = "Calibrate - click 4 corners of the results window"
 
@@ -64,6 +69,12 @@ def start_camera():
         })
     except Exception as e:
         print("Autofocus unavailable:", e)
+
+    # Bias exposure down: a washed-out strip has no colour left to measure.
+    try:
+        picam2.set_controls({"ExposureValue": EXPOSURE_VALUE})
+    except Exception as e:
+        print("Exposure control unavailable:", e)
 
     return picam2
 
