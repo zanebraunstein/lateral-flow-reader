@@ -299,6 +299,8 @@ def record_run(picam2, run_dir, window_quad, bands):
                 stability.stable_control
             )
 
+            viz.draw_timer(windows["Lateral Flow Reader"], elapsed, RUN_DURATION_S)
+
             for name, image in windows.items():
                 cv.imshow(name, image)
 

@@ -57,6 +57,17 @@ def test_readout_shows_positive_only_when_test_is_stable():
     assert colors["positive"]
 
 
+def test_draw_timer_writes_in_the_top_right():
+    disp = np.zeros((1080, 1920, 3), np.uint8)
+
+    viz.draw_timer(disp, 134, 900)     # 02:14 / 15:00
+
+    region = disp[20:60, 1500:]        # top-right corner
+    assert np.any(np.all(region == viz.COLOR_TEXT, axis=2))
+    # nothing drawn on the left half
+    assert not np.any(np.all(disp[:, :900] == viz.COLOR_TEXT, axis=2))
+
+
 def test_render_produces_every_window():
     frame = synth.cassette_frame(t_amp=50)
 

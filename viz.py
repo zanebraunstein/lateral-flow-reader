@@ -172,6 +172,21 @@ def draw_searching(disp):
     cv.putText(disp, "Searching...", (20, 40), FONT, 1.0, COLOR_SEARCHING, 2)
 
 
+def draw_timer(disp, elapsed, total_seconds=None):
+    """
+    Elapsed run time (mm:ss), top-right of the main view. With total_seconds
+    it also shows the target, e.g. "02:14 / 15:00".
+    """
+    mins, secs = divmod(int(elapsed), 60)
+    text = f"{mins:02d}:{secs:02d}"
+
+    if total_seconds:
+        text += f" / {int(total_seconds) // 60:02d}:00"
+
+    (tw, _), _ = cv.getTextSize(text, FONT, 1.0, 2)
+    cv.putText(disp, text, (disp.shape[1] - tw - 20, 48), FONT, 1.0, COLOR_TEXT, 2)
+
+
 def draw_readout(disp, tc_ratio, t_snr, c_snr, stable_test, stable_control):
     """
     Two-line verdict, using the debounced (stable) detections. The control line
