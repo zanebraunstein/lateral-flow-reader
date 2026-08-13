@@ -523,6 +523,35 @@ def band_area(profile, idx, half_width=6, frac=0.5, exclude=()):
     return float(np.sum(np.clip(segment, 0.0, None)))
 
 
+def band_rgb(strip_bgr, idx, half_width=6):
+    """
+    Median (R, G, B) of the darkest pixels in the band at `idx` -- the colour of
+    the line at its densest. Returns None if there is no band.
+
+    The darkest half of the band region is used so the surrounding lighter
+    membrane does not wash the colour out.
+    """
+    if idx is None:
+        return None
+
+    w = strip_bgr.shape[1]
+    lo = max(0, idx - half_width)
+    hi = min(w, idx + half_width + 1)
+
+    region = strip_bgr[:, lo:hi].reshape(-1, 3).astype(np.float32)
+
+    if region.shape[0] == 0:
+        return None
+
+    luminance = region.sum(axis=1)
+    k = max(1, region.shape[0] // 2)
+    darkest = region[np.argsort(luminance)[:k]]
+
+    b, g, r = np.median(darkest, axis=0)
+
+    return (int(round(r)), int(round(g)), int(round(b)))
+
+
 def band_signal_snr(profile, idx, half_width=6, exclude=()):
     """
     Return band strength and signal-to-noise ratio. `exclude` masks other bands
@@ -561,6 +590,7 @@ class BandReading:
     present: bool
     area: float = 0.0
     peak_a: float = 0.0
+    rgb: Optional[tuple] = None
 
 
 @dataclass
@@ -661,6 +691,9 @@ def _measure_strip(results_window, warped, quad, window_bounds, strip_rect, band
     t_peak_a = band_peak_height(raw_profile, t_idx, exclude=(c_idx,))
     c_peak_a = band_peak_height(raw_profile, c_idx, exclude=(t_idx,))
 
+    t_rgb = band_rgb(strip_roi, t_idx)
+    c_rgb = band_rgb(strip_roi, c_idx)
+
     control_present = c_snr >= CONTROL_SNR_THRESHOLD
     test_present = t_snr >= TEST_SNR_THRESHOLD and control_present
 
@@ -684,8 +717,8 @@ def _measure_strip(results_window, warped, quad, window_bounds, strip_rect, band
         strip_roi=strip_roi,
         profile=profile,
         candidates=candidates,
-        test=BandReading(t_idx, t_strength, t_snr, test_present, t_area, t_peak_a),
-        control=BandReading(c_idx, c_strength, c_snr, control_present, c_area, c_peak_a),
+        test=BandReading(t_idx, t_strength, t_snr, test_present, t_area, t_peak_a, t_rgb),
+        control=BandReading(c_idx, c_strength, c_snr, control_present, c_area, c_peak_a, c_rgb),
         tc_ratio=tc_ratio,
         raw_profile=raw_profile,
         scale=scale,

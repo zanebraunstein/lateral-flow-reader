@@ -45,7 +45,11 @@ CSV_HEADER = [
     "tc_area_ratio",
     "test_peak_a",
     "control_peak_a",
-    "profile_scale"
+    "profile_scale",
+    # Test line colour at its darkest pixels (-1 if no band that frame)
+    "test_r",
+    "test_g",
+    "test_b"
 ]
 
 
@@ -97,7 +101,8 @@ def csv_row(elapsed, result, stability):
         f"{result.tc_area_ratio:.4f}",
         f"{result.test.peak_a:.4f}",
         f"{result.control.peak_a:.4f}",
-        f"{result.scale:.4f}"
+        f"{result.scale:.4f}",
+        *(result.test.rgb or (-1, -1, -1))
     ]
 
 

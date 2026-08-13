@@ -53,6 +53,27 @@ def test_snr_excludes_the_other_band_from_noise():
     assert excluding > including
 
 
+def test_band_rgb_reads_the_line_colour():
+    # BGR strip, reddish band (low B/G, high R) at column 100
+    strip_bgr = np.full((20, 200, 3), 235, np.uint8)
+    strip_bgr[:, 95:106] = (40, 40, 210)      # B, G, R
+
+    r, g, b = strip.band_rgb(strip_bgr, 100)
+
+    assert r > 180 and g < 90 and b < 90       # returned as (R, G, B)
+
+
+def test_band_rgb_is_none_for_missing_band():
+    assert strip.band_rgb(np.full((20, 200, 3), 235, np.uint8), None) is None
+
+
+def test_analyze_records_the_test_line_colour():
+    result = strip.analyze(synth.cassette_frame(t_amp=60))
+
+    assert result.test.rgb is not None
+    assert len(result.test.rgb) == 3
+
+
 def test_snr_is_zero_for_missing_band():
     profile = strip.redness_profile(synth.strip_image([]))
 

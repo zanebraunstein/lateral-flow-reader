@@ -57,6 +57,30 @@ def test_plateau_is_found_near_the_true_knee(linear_run):
     assert reached == pytest.approx(expected, abs=analysis.BIN_SECONDS + 1)
 
 
+@pytest.mark.parametrize("duration,test_from", [
+    (900, 60),     # normal, plateaus
+    (200, 60),     # stopped while still rising
+    (75, 60),      # stopped soon after onset
+    (200, 185),    # onset late in a short run
+])
+def test_detected_onset_always_yields_a_rate(tmp_path, duration, test_from):
+    """
+    Whenever the positivity onset is detected, a rate must be reported -- the
+    onset is the start of the rate interval, extended to the run's end if the
+    line has not plateaued.
+    """
+    path = str(tmp_path / "r")
+    synth.make_run_npz(path, duration=duration, test_from=test_from,
+                       rise_to=600, plateau_area=200)
+
+    result = analysis.analyze_run(path)
+
+    assert result["positive"]                              # onset detected
+    assert result["time_to_positivity_s"] is not None
+    assert result["rate"]["test_area_per_s"] is not None   # ...so a rate exists
+    assert result["rate"]["interval_s"][0] == pytest.approx(test_from, abs=2)
+
+
 def test_run_stopped_before_plateau_still_gives_a_rate(tmp_path):
     """
     A run stopped while the line is still rising must still yield a rate,
@@ -76,6 +100,35 @@ def test_run_stopped_before_plateau_still_gives_a_rate(tmp_path):
     assert rate["interval_s"][1] == pytest.approx(200, abs=analysis.BIN_SECONDS + 1)
 
     assert "still rising" in analysis.format_report(result)
+
+
+def test_test_line_rgb_picks_the_darkest_frame():
+    data = {
+        "test_present": np.array([1, 1, 1]),
+        "test_r": np.array([200, 210, 190]),
+        "test_g": np.array([50, 40, 60]),
+        "test_b": np.array([50, 40, 60]),
+        "test_area": np.array([10.0, 30.0, 20.0]),   # darkest = frame 1 (max area)
+    }
+
+    assert analysis.test_line_rgb(data) == (210, 40, 40)
+
+
+def test_test_line_rgb_none_when_colour_absent():
+    # older run without the RGB columns
+    data = {"test_present": np.array([1]), "test_area": np.array([10.0])}
+
+    assert analysis.test_line_rgb(data) is None
+
+
+def test_report_still_works_on_runs_without_rgb(tmp_path):
+    path = str(tmp_path / "r")
+    synth.make_run_npz(path, test_from=180)          # make_run_npz stores no RGB
+
+    result = analysis.analyze_run(path)
+
+    assert result["density"]["test_rgb"] is None
+    assert "T line RGB      --" in analysis.format_report(result)
 
 
 def test_negative_run_reports_nothing_invented(tmp_path):
