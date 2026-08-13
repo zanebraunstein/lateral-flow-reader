@@ -109,16 +109,16 @@ def test_snap_t_c_skips_a_missing_test_position():
     assert abs(c_idx - 150) <= 3
 
 
-def test_calibrated_path_uses_snapping_not_the_candidate_picker(monkeypatch):
+def test_calibrated_path_uses_placement_invariant_detection(monkeypatch):
     """
-    The fix: with calibrated positions, analyze() must locate bands by snapping
-    to the peak, not via the width-filtered candidate picker.
+    The fix: with a calibration, analyze() must locate bands from the dominant
+    peaks (placement-invariant), not via the width-filtered candidate picker.
     """
     called = []
-    real_snap = strip.snap_t_c
+    real_find = strip.find_t_c
     monkeypatch.setattr(
-        strip, "snap_t_c",
-        lambda *a, **k: (called.append("snap"), real_snap(*a, **k))[1]
+        strip, "find_t_c",
+        lambda *a, **k: (called.append("find"), real_find(*a, **k))[1]
     )
     monkeypatch.setattr(
         strip, "pick_t_c_from_peaks",
@@ -128,7 +128,7 @@ def test_calibrated_path_uses_snapping_not_the_candidate_picker(monkeypatch):
     frame, quad = synth.window_scene_at(control_frac=0.20, test_frac=0.80)
     strip.analyze(frame, window_quad=quad, bands=(0.80, 0.20))
 
-    assert "snap" in called
+    assert "find" in called
     assert "pick" not in called
 
 
@@ -139,12 +139,12 @@ def test_detection_path_still_uses_the_candidate_picker(monkeypatch):
         strip, "pick_t_c_from_peaks",
         lambda *a, **k: called.append("pick") or (None, None)
     )
-    monkeypatch.setattr(strip, "snap_t_c", lambda *a, **k: called.append("snap") or (None, None))
+    monkeypatch.setattr(strip, "find_t_c", lambda *a, **k: called.append("find") or (None, None))
 
     strip.analyze(synth.cassette_frame(t_amp=50))
 
     assert "pick" in called
-    assert "snap" not in called
+    assert "find" not in called
 
 
 def test_calibrated_path_finds_broad_bands():
@@ -286,14 +286,34 @@ def test_bands_is_none_when_positions_absent():
     assert cal.bands is None
 
 
-def test_none_test_frac_means_no_test_band():
-    """A calibration that only learned the control searches for no test line."""
+def test_calibration_detects_a_test_line_it_did_not_learn():
+    """
+    Placement-invariant detection finds a test line from the dominant peaks even
+    if calibration only knew the control -- a test appearing later is caught.
+    """
     frame, quad = synth.window_scene(t_amp=50, c_amp=70)
 
     result = strip.analyze(frame, window_quad=quad, bands=(None, strip.EXPECTED_C_FRAC))
 
     assert result.control.present
-    assert result.test.idx is None
+    assert result.test.present
+
+
+def test_detection_is_placement_invariant():
+    """
+    The core fix: shifting the cassette so the bands sit at different fractions
+    than calibration still detects both, because detection follows the peaks.
+    """
+    # Calibrated for bands near 0.20 / 0.80, but this cassette has them shifted
+    # to 0.35 / 0.65 -- both must still be found and correctly labelled.
+    frame, quad = synth.window_scene_at(control_frac=0.35, test_frac=0.65,
+                                        control_amp=80, test_amp=60)
+    result = strip.analyze(frame, window_quad=quad, bands=(0.80, 0.20))
+
+    n = len(result.profile)
+    assert result.control.present and result.test.present
+    assert result.control.idx / n == pytest.approx(0.35, abs=0.05)
+    assert result.test.idx / n == pytest.approx(0.65, abs=0.05)
 
 
 def test_calibration_control_only_is_negative_not_invalid():

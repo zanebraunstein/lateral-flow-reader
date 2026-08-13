@@ -421,6 +421,44 @@ def dominant_two_bands(profile, candidates, min_sep_frac=MIN_TC_SEPARATION_FRAC)
     return sorted(chosen)
 
 
+def control_side_of(test_frac, control_frac):
+    """
+    Which side of the strip the control sits on, from the calibrated positions.
+    """
+    if control_frac is None:
+        if test_frac is None:
+            return "left"
+        return "left" if test_frac >= 0.5 else "right"
+    if test_frac is None:
+        return "left" if control_frac < 0.5 else "right"
+    return "left" if control_frac <= test_frac else "right"
+
+
+def find_t_c(profile, control_side):
+    """
+    Locate the test and control bands from the two dominant peaks, labelled by
+    which side the control is on.
+
+    Placement-invariant: it finds the bands wherever they sit in the strip, so
+    the cassette need not be in the exact calibrated position (a fresh placement
+    that shifts the peaks a little still detects). Uses raw peaks so a broad
+    band is not lost to the width filter.
+    """
+    found = dominant_two_bands(profile, find_peak_candidates(profile))
+
+    if len(found) == 2:
+        left, right = found
+        return (right, left) if control_side == "left" else (left, right)
+
+    if len(found) == 1:
+        idx = found[0]
+        on_left = idx < len(profile) / 2
+        is_control = on_left == (control_side == "left")
+        return (None, idx) if is_control else (idx, None)
+
+    return None, None
+
+
 def pick_t_c_from_peaks(
     profile,
     candidates,
@@ -678,9 +716,10 @@ def _measure_strip(results_window, warped, quad, window_bounds, strip_rect, band
     candidates = filter_band_candidates(profile)
 
     if bands is not None:
-        # Calibrated positions known: snap to the tallest peak near each, so a
-        # broad band is not lost to the width filter.
-        t_idx, c_idx = snap_t_c(profile, test_frac, control_frac)
+        # Calibrated: find the two dominant peaks and label them by the control
+        # side. Placement-invariant, so a fresh cassette that shifts the peaks a
+        # little still detects, and a broad band is not lost to the width filter.
+        t_idx, c_idx = find_t_c(profile, control_side_of(test_frac, control_frac))
     else:
         t_idx, c_idx = pick_t_c_from_peaks(profile, candidates, test_frac, control_frac)
 
