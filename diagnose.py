@@ -1,30 +1,32 @@
 import time
-import numpy as np
 import cv2 as cv
-import calibration as calib, strip, main
+import calibration as calib
+import strip
+import viz
+import main
 
 picam2 = main.start_camera()
 time.sleep(1.5)
 cal = calib.load()
-
-N, cdet, tdet = 30, 0, 0
-csn, tsn, sc, last = [], [], [], None
-for _ in range(N):
-    last = main.grab_frame(picam2)
-    r = strip.analyze(last, cal.window_quad, cal.bands)
-    cdet += r.control.idx is not None
-    tdet += r.test.idx is not None
-    csn.append(r.control.snr); tsn.append(r.test.snr); sc.append(r.scale)
-    time.sleep(0.15)
+frame = main.grab_frame(picam2)
 picam2.stop()
 
-print("control detected %d/%d  snr mean %.1f max %.1f" % (cdet, N, sum(csn)/N, max(csn)))
-print("test    detected %d/%d  snr mean %.1f max %.1f" % (tdet, N, sum(tsn)/N, max(tsn)))
-print("profile scale mean %.2f" % (sum(sc)/N))
+r = strip.analyze(frame, cal.window_quad, cal.bands)
+n = len(r.profile)
+frac = lambda i: None if i is None else round(i / n, 3)
 
-warped = strip.warp_quad(last, np.asarray(cal.window_quad, np.float32),
-                         strip.WINDOW_CANON_W, strip.WINDOW_CANON_H)
-roi = strip.extract_strip_roi(warped)
-gray = cv.cvtColor(roi, cv.COLOR_BGR2GRAY)
-print("strip brightness: mean %.0f max %d   pct>250: %.1f%%"
-      % (gray.mean(), gray.max(), 100 * (gray > 250).mean()))
+# the actual strip the profile is computed from, upscaled 3x
+big = cv.resize(r.strip_roi, (r.strip_roi.shape[1] * 3, r.strip_roi.shape[0] * 3),
+                interpolation=cv.INTER_NEAREST)
+cv.imwrite("diag_strip.png", big)
+
+# the profile with T (cyan), C (green), candidates (yellow) marked
+pv = viz.draw_profile(r.profile)
+viz.mark_bands_on_profile(pv, r.profile, r.test.idx, r.control.idx, r.candidates)
+cv.imwrite("diag_profile.png", pv)
+
+print("saved diag_strip.png and diag_profile.png")
+print("calib:    control=%.3f  test=%.3f" % (cal.control_frac, cal.test_frac))
+print("detected: control=%s (snr %.1f)  test=%s (snr %.1f)"
+      % (frac(r.control.idx), r.control.snr, frac(r.test.idx), r.test.snr))
+print("candidates:", [(round(c / n, 3), round(float(r.profile[c]), 1)) for c in r.candidates])
