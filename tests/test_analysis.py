@@ -102,6 +102,22 @@ def test_run_stopped_before_plateau_still_gives_a_rate(tmp_path):
     assert "still rising" in analysis.format_report(result)
 
 
+def test_warmup_ignores_an_early_false_line(tmp_path):
+    """
+    A line reading positive during the initial flow (before the warmup) must
+    not be taken as the onset; onset should land at or after the warmup.
+    """
+    import strip
+
+    # test SNR high from 5 s (initial flow) -- inside the 20 s warmup
+    path = str(tmp_path / "run")
+    synth.make_run_npz(path, duration=120, test_from=5, rise_to=600, plateau_area=200)
+
+    result = analysis.analyze_run(path)
+
+    assert result["time_to_positivity_s"] >= strip.TEST_WARMUP_S - 1
+
+
 def test_test_line_rgb_picks_the_darkest_frame():
     data = {
         "test_present": np.array([1, 1, 1]),

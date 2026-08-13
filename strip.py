@@ -65,6 +65,10 @@ TEST_SNR_THRESHOLD = 4.0
 STABILITY_WINDOW = 10
 STABILITY_VOTES = 7
 
+# The initial sample flow front can read as a test line before the real one
+# develops, so ignore the test line for this long after the run starts.
+TEST_WARMUP_S = 20.0
+
 
 def order_points(pts):
     pts = pts.astype(np.float32)

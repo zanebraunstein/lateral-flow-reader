@@ -222,9 +222,11 @@ def analyze_run(run_dir, test_snr=None, control_snr=None, bin_s=BIN_SECONDS):
     if t.size == 0:
         return {"run_dir": run_dir, "frames": 0, "error": "run contains no frames"}
 
-    # Re-derive detection from stored SNRs so thresholds are tunable here
+    # Re-derive detection from stored SNRs so thresholds are tunable here.
+    # Ignore the test line during the warmup: the initial sample flow can read
+    # as a line before the real one develops.
     control_present = d["control_snr"] >= control_snr
-    test_present = (d["test_snr"] >= test_snr) & control_present
+    test_present = (d["test_snr"] >= test_snr) & control_present & (t >= strip.TEST_WARMUP_S)
 
     control_onset, _ = latch_time(t, control_present)
     onset, confirmed = latch_time(t, test_present)
@@ -279,6 +281,10 @@ def analyze_run(run_dir, test_snr=None, control_snr=None, bin_s=BIN_SECONDS):
         rate_start = development_start(tb, area)
     else:
         rate_start = None
+
+    # Never start the rate inside the warmup window (initial flow).
+    if rate_start is not None:
+        rate_start = max(rate_start, float(strip.TEST_WARMUP_S))
 
     # End of the rate interval: the plateau only if it flattened AND lands after
     # the start (a faint noisy line can "plateau" before onset); otherwise the

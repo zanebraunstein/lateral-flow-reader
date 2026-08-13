@@ -95,6 +95,9 @@ def test_display_windows_are_drawn(monkeypatch, tmp_path, fake_camera, headless)
 
 
 def test_recorded_run_analyses_end_to_end(monkeypatch, tmp_path, fake_camera, headless):
+    import strip
+    monkeypatch.setattr(strip, "TEST_WARMUP_S", 0.0)   # tiny synthetic run
+
     run_dir = run_loop(monkeypatch, tmp_path, fake_camera, developing_run())
 
     result = analysis.analyze_run(run_dir, bin_s=0.05)

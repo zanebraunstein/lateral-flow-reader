@@ -278,6 +278,10 @@ def record_run(picam2, run_dir, window_quad, bands):
             result = strip.analyze(frame, window_quad, bands)
 
             if result is not None:
+                # Ignore the test line during the initial-flow warmup.
+                if elapsed < strip.TEST_WARMUP_S:
+                    result.test.present = False
+
                 stability.update(result)
 
                 try:
