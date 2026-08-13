@@ -225,7 +225,9 @@ def render(frame, result, stable_test=False, stable_control=False):
         (result.control, "C", COLOR_CONTROL),
         (result.test, "T", COLOR_TEST)
     ):
-        if band.idx is not None:
+        # Only mark a band the reader is actually confident in, so a peak
+        # snapped onto noise does not draw a misleading line.
+        if band.idx is not None and band.present:
             draw_band_line_on_main(
                 disp,
                 result.quad,
@@ -261,8 +263,8 @@ def render(frame, result, stable_test=False, stable_control=False):
     mark_bands_on_profile(
         profile_vis,
         result.profile,
-        result.test.idx,
-        result.control.idx,
+        result.test.idx if result.test.present else None,
+        result.control.idx if result.control.present else None,
         result.candidates
     )
 

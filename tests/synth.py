@@ -101,11 +101,13 @@ def window_scene(t_amp=50, c_amp=70, quad=None):
     return _paint_window(canvas, quad)
 
 
-def window_scene_at(control_frac, test_frac, control_amp=70, test_amp=50, quad=None):
+def window_scene_at(control_frac, test_frac, control_amp=70, test_amp=50,
+                    quad=None, band_half=5):
     """
     Like window_scene but with the control and test bands placed at explicit
     strip fractions -- so a cassette of either orientation can be built
-    (e.g. control on the left with control_frac < test_frac).
+    (e.g. control on the left with control_frac < test_frac). `band_half` sets
+    each band's half-width in pixels (large values make broad bands).
     """
     import strip
 
@@ -115,11 +117,22 @@ def window_scene_at(control_frac, test_frac, control_amp=70, test_amp=50, quad=N
     sx0, sy0, sx1, sy1 = strip.strip_bounds(canvas)
     strip_w = sx1 - sx0
 
+    xs = np.arange(w, dtype=np.float32)
+
     for frac, amp in ((control_frac, control_amp), (test_frac, test_amp)):
         if amp <= 0:
             continue
-        x = int(sx0 + frac * strip_w)
-        canvas[sy0:sy1, x - 5:x + 6] = (MEMBRANE - amp, MEMBRANE - amp, MEMBRANE)
+
+        cx = sx0 + frac * strip_w
+        # Gaussian band: reduce blue/green (keep red) so it reads reddish, with
+        # band_half as the width. Broad bands (large band_half) exceed the
+        # candidate width filter, exercising the snap-to-peak path.
+        dip = amp * np.exp(-0.5 * ((xs - cx) / band_half) ** 2)
+
+        region = canvas[sy0:sy1].astype(np.float32)
+        region[:, :, 0] -= dip
+        region[:, :, 1] -= dip
+        canvas[sy0:sy1] = np.clip(region, 0, 255).astype(np.uint8)
 
     return _paint_window(canvas, quad)
 

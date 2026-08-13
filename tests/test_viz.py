@@ -69,6 +69,25 @@ def test_render_without_cassette_shows_only_main_view():
     assert list(viz.render(frame, strip.analyze(frame))) == ["Lateral Flow Reader"]
 
 
+def test_absent_band_draws_no_marker():
+    """
+    Snapping to a calibrated position may land on noise when a band is absent;
+    the marker must not draw unless the band is actually present.
+    """
+    # Control present (left), no test line (right)
+    frame, quad = synth.window_scene_at(
+        control_frac=0.20, test_frac=0.80, control_amp=70, test_amp=0
+    )
+    result = strip.analyze(frame, window_quad=quad, bands=(0.80, 0.20))
+
+    assert not result.test.present
+
+    disp = viz.render(frame, result)["Lateral Flow Reader"]
+    ys, xs = np.where(np.all(disp == viz.COLOR_TEST, axis=2))
+
+    assert xs[ys > 250].size == 0     # no test marker in the window region
+
+
 def test_render_does_not_touch_the_measurement():
     """
     Overlays were once drawn into the same buffer the strip was sliced from,

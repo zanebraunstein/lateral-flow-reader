@@ -314,6 +314,55 @@ def pick_peak_near(profile, candidates, expected_frac, radius_frac):
     return best
 
 
+def snap_to_peak(profile, expected_frac, radius_frac):
+    """
+    Position of the tallest local maximum within `radius_frac` of the expected
+    fractional position -- the visible peak nearest where the band should be.
+
+    Unlike the candidate picker this ignores band width, so a broad band that
+    width-filtering would drop is still located; SNR decides presence. Returns
+    None only if the window contains no local maximum (a flat region).
+    """
+    n = len(profile)
+
+    expected = int(expected_frac * n)
+    radius = int(radius_frac * n)
+
+    lo = max(1, expected - radius)
+    hi = min(n - 1, expected + radius)
+
+    best = None
+    best_height = -1e18
+
+    for i in range(lo, hi + 1):
+        # A local maximum with real relief on at least one side, so a flat
+        # (saturated) region is not mistaken for a peak.
+        rises = profile[i] >= profile[i - 1] and profile[i] >= profile[i + 1]
+        strict = profile[i] > profile[i - 1] or profile[i] > profile[i + 1]
+
+        if rises and strict and profile[i] > best_height:
+            best_height = profile[i]
+            best = i
+
+    return best
+
+
+def snap_t_c(profile, test_frac, control_frac, radius_frac=SEARCH_RADIUS_FRAC):
+    """
+    Locate the test and control bands by snapping to the tallest peak near each
+    calibrated position. For the fixed-rig path, where the positions are known
+    and the width filter only gets in the way.
+    """
+    t_idx = None if test_frac is None else snap_to_peak(profile, test_frac, radius_frac)
+    c_idx = None if control_frac is None else snap_to_peak(profile, control_frac, radius_frac)
+
+    # If both snapped to the same peak, keep it as the control (the anchor).
+    if t_idx is not None and t_idx == c_idx:
+        t_idx = None
+
+    return t_idx, c_idx
+
+
 def dominant_two_bands(profile, candidates, min_sep_frac=MIN_TC_SEPARATION_FRAC):
     """
     The strongest candidate peaks that are far enough apart to be a real band
@@ -552,7 +601,12 @@ def _measure_strip(results_window, warped, quad, window_bounds, bands=None):
 
     candidates = filter_band_candidates(profile)
 
-    t_idx, c_idx = pick_t_c_from_peaks(profile, candidates, test_frac, control_frac)
+    if bands is not None:
+        # Calibrated positions known: snap to the tallest peak near each, so a
+        # broad band is not lost to the width filter.
+        t_idx, c_idx = snap_t_c(profile, test_frac, control_frac)
+    else:
+        t_idx, c_idx = pick_t_c_from_peaks(profile, candidates, test_frac, control_frac)
 
     t_strength, t_snr = band_signal_snr(profile, t_idx)
     c_strength, c_snr = band_signal_snr(profile, c_idx)

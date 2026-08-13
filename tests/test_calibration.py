@@ -57,6 +57,101 @@ def test_calibration_measures_with_no_cassette_present():
     assert result.test.present
 
 
+def test_snap_to_peak_finds_the_tallest_local_max():
+    n = 200
+    xs = np.arange(n)
+    prof = 6.0 * np.exp(-((xs - 60) / 18.0) ** 2)      # tall peak at 60
+    prof += 2.0 * np.exp(-((xs - 95) / 3.0) ** 2)      # smaller bump at 95
+
+    assert abs(strip.snap_to_peak(prof, 0.30, 0.30) - 60) <= 2
+
+
+def test_snap_to_peak_locates_a_broad_band_the_width_filter_drops():
+    """
+    The real bug: a broad band exceeds MAX_BAND_WIDTH so it never becomes a
+    candidate, and the candidate picker lands on a narrow shoulder bump.
+    Snapping ignores width and finds the broad peak.
+    """
+    n = 200
+    xs = np.arange(n)
+    prof = 5.0 * np.exp(-((xs - 60) / 28.0) ** 2)      # broad -> width > MAX
+    prof += 3.0 * np.exp(-((xs - 88) / 2.5) ** 2)      # narrow bump nearby
+
+    candidates = strip.filter_band_candidates(prof)
+    picked = strip.pick_peak_near(prof, candidates, 0.30, 0.30)
+    snapped = strip.snap_to_peak(prof, 0.30, 0.30)
+
+    # the broad peak is not among the width-filtered candidates...
+    assert all(abs(c - 60) > 8 for c in candidates)
+    # ...so the candidate picker misses it, but snapping lands on it
+    assert picked is None or abs(picked - 60) > 8
+    assert abs(snapped - 60) <= 3
+
+
+def test_snap_to_peak_returns_none_on_a_flat_region():
+    assert strip.snap_to_peak(np.zeros(200), 0.5, 0.1) is None
+
+
+def test_snap_t_c_skips_a_missing_test_position():
+    xs = np.arange(200)
+    prof = 5.0 * np.exp(-((xs - 150) / 5.0) ** 2)
+
+    t_idx, c_idx = strip.snap_t_c(prof, None, 0.75)
+
+    assert t_idx is None
+    assert abs(c_idx - 150) <= 3
+
+
+def test_calibrated_path_uses_snapping_not_the_candidate_picker(monkeypatch):
+    """
+    The fix: with calibrated positions, analyze() must locate bands by snapping
+    to the peak, not via the width-filtered candidate picker.
+    """
+    called = []
+    real_snap = strip.snap_t_c
+    monkeypatch.setattr(
+        strip, "snap_t_c",
+        lambda *a, **k: (called.append("snap"), real_snap(*a, **k))[1]
+    )
+    monkeypatch.setattr(
+        strip, "pick_t_c_from_peaks",
+        lambda *a, **k: called.append("pick") or (None, None)
+    )
+
+    frame, quad = synth.window_scene_at(control_frac=0.20, test_frac=0.80)
+    strip.analyze(frame, window_quad=quad, bands=(0.80, 0.20))
+
+    assert "snap" in called
+    assert "pick" not in called
+
+
+def test_detection_path_still_uses_the_candidate_picker(monkeypatch):
+    """The full-cassette path (no calibration) is unchanged."""
+    called = []
+    monkeypatch.setattr(
+        strip, "pick_t_c_from_peaks",
+        lambda *a, **k: called.append("pick") or (None, None)
+    )
+    monkeypatch.setattr(strip, "snap_t_c", lambda *a, **k: called.append("snap") or (None, None))
+
+    strip.analyze(synth.cassette_frame(t_amp=50))
+
+    assert "pick" in called
+    assert "snap" not in called
+
+
+def test_calibrated_path_finds_broad_bands():
+    """Calibrated snapping locates both bands at their positions."""
+    frame, quad = synth.window_scene_at(
+        control_frac=0.20, test_frac=0.80, control_amp=90, test_amp=90, band_half=22
+    )
+    result = strip.analyze(frame, window_quad=quad, bands=(0.80, 0.20))
+
+    n = len(result.profile)
+    assert result.test.idx / n == pytest.approx(0.80, abs=0.05)
+    assert result.control.idx / n == pytest.approx(0.20, abs=0.05)
+
+
 def test_dominant_two_bands_returns_peaks_left_to_right():
     # Make the RIGHT band the stronger one, so strength order (right, left)
     # differs from position order -- only a position sort gives left-to-right.
