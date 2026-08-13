@@ -166,6 +166,17 @@ def strip_bounds(results_window):
     )
 
 
+def calibrated_strip_bounds(results_window):
+    """
+    Strip rectangle for the calibrated path: the FULL width of the box the user
+    marked, trimmed vertically to the band row. What you calibrate is what gets
+    analysed, so the analysed region lines up with the calibration box.
+    """
+    h, w = results_window.shape[:2]
+
+    return (0, int(STRIP_Y0_FRAC * h), w, int(STRIP_Y1_FRAC * h))
+
+
 def extract_strip_roi(results_window):
     x0, y0, x1, y1 = strip_bounds(results_window)
 
@@ -571,6 +582,8 @@ def analyze(frame, window_quad=None, bands=None):
         warped = warp_quad(frame, quad, WINDOW_CANON_W, WINDOW_CANON_H)
         window_bounds = (0, 0, WINDOW_CANON_W, WINDOW_CANON_H)
         results_window = warped
+        # Analyse the full marked box, so it matches the calibration.
+        strip_rect = calibrated_strip_bounds(results_window)
     else:
         quad = find_cassette_quad(frame)
 
@@ -582,11 +595,12 @@ def analyze(frame, window_quad=None, bands=None):
         x0, y0, x1, y1 = results_window_bounds()
         window_bounds = (x0, y0, x1, y1)
         results_window = warped[y0:y1, x0:x1]
+        strip_rect = strip_bounds(results_window)
 
-    return _measure_strip(results_window, warped, quad, window_bounds, bands)
+    return _measure_strip(results_window, warped, quad, window_bounds, strip_rect, bands)
 
 
-def _measure_strip(results_window, warped, quad, window_bounds, bands=None):
+def _measure_strip(results_window, warped, quad, window_bounds, strip_rect, bands=None):
     """
     Shared measurement core for both the detection and calibration paths.
     """
@@ -594,8 +608,10 @@ def _measure_strip(results_window, warped, quad, window_bounds, bands=None):
         test_frac, control_frac = bands
     else:
         test_frac, control_frac = EXPECTED_T_FRAC, EXPECTED_C_FRAC
+
+    sx0, sy0, sx1, sy1 = strip_rect
     # Copy: the result must stay valid even if the caller later draws on `warped`
-    strip_roi = extract_strip_roi(results_window).copy()
+    strip_roi = results_window[sy0:sy1, sx0:sx1].copy()
 
     # Detection runs on the normalised profile; density on the raw one
     raw_profile = raw_redness_profile(strip_roi)
@@ -639,7 +655,7 @@ def _measure_strip(results_window, warped, quad, window_bounds, bands=None):
         quad=quad,
         warped=warped,
         window_bounds=window_bounds,
-        strip_rect=strip_bounds(results_window),
+        strip_rect=strip_rect,
         strip_roi=strip_roi,
         profile=profile,
         candidates=candidates,

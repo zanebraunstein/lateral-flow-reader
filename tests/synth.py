@@ -88,7 +88,7 @@ def window_scene(t_amp=50, c_amp=70, quad=None):
 
     canvas = np.full((h, w, 3), MEMBRANE, np.uint8)
 
-    sx0, sy0, sx1, sy1 = strip.strip_bounds(canvas)
+    sx0, sy0, sx1, sy1 = strip.calibrated_strip_bounds(canvas)
     strip_w = sx1 - sx0
 
     for frac, amp in ((strip.EXPECTED_T_FRAC, t_amp), (strip.EXPECTED_C_FRAC, c_amp)):
@@ -114,7 +114,7 @@ def window_scene_at(control_frac, test_frac, control_amp=70, test_amp=50,
     w, h = strip.WINDOW_CANON_W, strip.WINDOW_CANON_H
     canvas = np.full((h, w, 3), MEMBRANE, np.uint8)
 
-    sx0, sy0, sx1, sy1 = strip.strip_bounds(canvas)
+    sx0, sy0, sx1, sy1 = strip.calibrated_strip_bounds(canvas)
     strip_w = sx1 - sx0
 
     xs = np.arange(w, dtype=np.float32)
