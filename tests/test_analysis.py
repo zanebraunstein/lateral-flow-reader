@@ -48,11 +48,34 @@ def test_recovers_rate_of_change(linear_run):
 
 
 def test_plateau_is_found_near_the_true_knee(linear_run):
-    reached = analysis.analyze_run(linear_run)["density"]["plateau_reached_s"]
+    result = analysis.analyze_run(linear_run)
+    reached = result["density"]["plateau_reached_s"]
 
     expected = ONSET + analysis.PLATEAU_FRAC * (RISE_TO - ONSET)
 
+    assert result["rate"]["plateaued"]
     assert reached == pytest.approx(expected, abs=analysis.BIN_SECONDS + 1)
+
+
+def test_run_stopped_before_plateau_still_gives_a_rate(tmp_path):
+    """
+    A run stopped while the line is still rising must still yield a rate,
+    measured over onset -> end of run, flagged as not plateaued.
+    """
+    path = str(tmp_path / "early")
+    # would plateau at 600 s, but the run is cut off at 200 s
+    synth.make_run_npz(path, duration=200, test_from=60, rise_to=600, plateau_area=200)
+
+    result = analysis.analyze_run(path)
+    rate = result["rate"]
+
+    assert not rate["plateaued"]
+    assert result["density"]["plateau_reached_s"] is None
+    assert rate["test_area_per_s"] == pytest.approx(200 / (600 - 60), rel=0.05)
+    # the interval runs to the end of the (short) run
+    assert rate["interval_s"][1] == pytest.approx(200, abs=analysis.BIN_SECONDS + 1)
+
+    assert "still rising" in analysis.format_report(result)
 
 
 def test_negative_run_reports_nothing_invented(tmp_path):

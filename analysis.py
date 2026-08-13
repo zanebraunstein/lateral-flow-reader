@@ -114,6 +114,29 @@ def find_plateau(t, y, tail_s=PLATEAU_TAIL_S, frac=PLATEAU_FRAC):
     return float(t[reached[0]]), level
 
 
+def reached_plateau(t, y, tail_s=PLATEAU_TAIL_S, slope_frac=0.1):
+    """
+    True if the curve has flattened by the end: the rise over the last `tail_s`
+    is a small fraction of the whole rise. False means it was still developing
+    when the run stopped (so the rate should run to the end, not a plateau).
+    """
+    if len(t) < 3:
+        return False
+
+    overall = float(np.max(y) - np.min(y))
+    if overall <= 0:
+        return False
+
+    tail = t >= (t[-1] - tail_s)
+    if tail.sum() < 2:
+        return False
+
+    tail_slope = np.polyfit(t[tail], y[tail], 1)[0]
+    tail_rise = abs(tail_slope) * (t[-1] - t[tail][0])
+
+    return tail_rise < slope_frac * overall
+
+
 def fit_rate(t, y, t0, t1):
     """
     Least-squares slope of y over [t0, t1], with R^2 so a badly non-linear
@@ -184,24 +207,33 @@ def analyze_run(run_dir, test_snr=None, control_snr=None, bin_s=BIN_SECONDS):
     _, ratio_level = find_plateau(tb, ratio)
     _, peak_level = find_plateau(tb, peak)
 
+    plateaued = reached_plateau(tb, area)
+
     out["density"] = {
         "test_area_a": area_level,
         "test_peak_a": peak_level,
         "tc_area_ratio": ratio_level,
-        "plateau_reached_s": t_plateau,
+        # Only a genuine flattening counts as a plateau time.
+        "plateau_reached_s": t_plateau if plateaued else None,
     }
 
-    area_rate, area_r2 = fit_rate(tb, area, onset, t_plateau)
-    ratio_rate, ratio_r2 = fit_rate(tb, ratio, onset, t_plateau)
+    # Measure the rate to the plateau if it flattened, otherwise to the end of
+    # the run -- so a run stopped a little early still yields a rate.
+    t_end = float(tb[-1]) if len(tb) else None
+    interval_end = t_plateau if (plateaued and t_plateau is not None) else t_end
+
+    area_rate, area_r2 = fit_rate(tb, area, onset, interval_end)
+    ratio_rate, ratio_r2 = fit_rate(tb, ratio, onset, interval_end)
 
     endpoint = None
-    if onset is not None and t_plateau is not None and t_plateau > onset:
+    if onset is not None and interval_end is not None and interval_end > onset:
         a0 = float(np.interp(onset, tb, area))
-        a1 = float(np.interp(t_plateau, tb, area))
-        endpoint = (a1 - a0) / (t_plateau - onset)
+        a1 = float(np.interp(interval_end, tb, area))
+        endpoint = (a1 - a0) / (interval_end - onset)
 
     out["rate"] = {
-        "interval_s": [onset, t_plateau],
+        "interval_s": [onset, interval_end],
+        "plateaued": plateaued,
         "test_area_per_s": area_rate,
         "test_area_r2": area_r2,
         "endpoint_area_per_s": endpoint,
@@ -260,9 +292,10 @@ def format_report(r):
     ]
 
     rt = r["rate"]
-    lines.append("Rate of change (onset -> plateau)")
+    endpoint = "plateau" if rt["plateaued"] else "stop (still rising)"
+    lines.append(f"Rate of change (onset -> {endpoint})")
     if rt["test_area_per_s"] is None:
-        lines.append("  not measurable (no onset, or no plateau reached)")
+        lines.append("  not measurable (no onset detected)")
     else:
         t0, t1 = rt["interval_s"]
         lines += [
@@ -273,6 +306,9 @@ def format_report(r):
             f"  T/C ratio rate  {_fmt(rt['tc_ratio_per_s'], '.6f')} /s"
             f"   (R^2 {_fmt(rt['tc_ratio_r2'], '.3f')})",
         ]
+        if not rt["plateaued"]:
+            lines.append("  note: line had not plateaued; rate is over the "
+                         "development so far.")
 
     return "\n".join(lines)
 
