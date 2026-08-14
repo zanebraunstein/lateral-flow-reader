@@ -23,13 +23,29 @@ WINDOW_Y0 = 0.22
 WINDOW_X1 = 0.93
 WINDOW_Y1 = 0.78
 
+# Canonical size of the results window on its own. Chosen to equal the pixel
+# size of the window crop in the full-cassette path, so the strip sample count
+# is identical either way and every tuning constant below stays valid whether
+# the window is found by detection or by calibration.
+WINDOW_CANON_W = int((WINDOW_X1 - WINDOW_X0) * CANON_W)
+WINDOW_CANON_H = int((WINDOW_Y1 - WINDOW_Y0) * CANON_H)
+
 STRIP_Y0_FRAC = 0.44
 STRIP_Y1_FRAC = 0.66
 
 STRIP_X0_FRAC = 0.30
 STRIP_X1_FRAC = 0.82
 
-EDGE_EXCLUDE_FRAC = 0.12
+# Calibrated path: symmetric margin trimmed off each side of the marked box, to
+# keep its border edges out of the analysed strip while staying centred.
+# Larger = cleaner detection (further from the box edges); smaller = the
+# analysed strip fills more of the box. Tune if detection is edgy or the box
+# feels too cropped.
+CAL_STRIP_MARGIN_FRAC = 0.15
+
+# Small: a band can sit near the edge of the strip (e.g. a control line close
+# to the window edge), so only the very rim is excluded as warp artifact.
+EDGE_EXCLUDE_FRAC = 0.05
 MIN_BAND_WIDTH = 6
 MAX_BAND_WIDTH = 45
 
@@ -38,13 +54,25 @@ EXPECTED_T_FRAC = 0.45
 SEARCH_RADIUS_FRAC = 0.18
 MIN_TC_SEPARATION_FRAC = 0.18
 
-# Band is called present above this SNR; test also requires a valid control
-CONTROL_SNR_THRESHOLD = 6.0
-TEST_SNR_THRESHOLD = 5.0
+# Detection sensitivity: a band counts as present above this SNR (test also
+# requires a valid control). LOWER = more sensitive (catches fainter lines but
+# risks noise); raise if it starts calling blanks positive. Check a run's real
+# SNR with diagnose.py and set these just below what your true lines produce.
+CONTROL_SNR_THRESHOLD = 4.5
+TEST_SNR_THRESHOLD = 4.0
+
+# Detection hysteresis: once a band is detected it stays detected until its SNR
+# drops below this fraction of the threshold. Stops a faint line hovering near
+# the threshold from flickering in and out.
+SNR_HYSTERESIS_FRAC = 0.6
 
 # A detection must hold for STABILITY_VOTES of the last STABILITY_WINDOW frames
 STABILITY_WINDOW = 10
 STABILITY_VOTES = 7
+
+# The initial sample flow front can read as a test line before the real one
+# develops, so ignore the test line for this long after the run starts.
+TEST_WARMUP_S = 20.0
 
 
 def order_points(pts):
@@ -103,12 +131,16 @@ def find_cassette_quad(frame):
     return None
 
 
-def warp_cassette(frame, quad):
+def warp_quad(frame, quad, out_w, out_h):
+    """
+    Perspective-warp the region bounded by `quad` to an out_w x out_h image.
+    `quad` is four points ordered tl, tr, br, bl in frame coordinates.
+    """
     dst = np.array([
         [0, 0],
-        [CANON_W - 1, 0],
-        [CANON_W - 1, CANON_H - 1],
-        [0, CANON_H - 1]
+        [out_w - 1, 0],
+        [out_w - 1, out_h - 1],
+        [0, out_h - 1]
     ], dtype=np.float32)
 
     M = cv.getPerspectiveTransform(
@@ -119,8 +151,12 @@ def warp_cassette(frame, quad):
     return cv.warpPerspective(
         frame,
         M,
-        (CANON_W, CANON_H)
+        (out_w, out_h)
     )
+
+
+def warp_cassette(frame, quad):
+    return warp_quad(frame, quad, CANON_W, CANON_H)
 
 
 def results_window_bounds():
@@ -147,6 +183,22 @@ def strip_bounds(results_window):
         int(STRIP_X1_FRAC * w),
         int(STRIP_Y1_FRAC * h)
     )
+
+
+def calibrated_strip_bounds(results_window):
+    """
+    Strip rectangle for the calibrated path: most of the marked box, trimmed by
+    a small SYMMETRIC margin on each side and to the band row vertically.
+
+    The margin keeps the box's edges -- the membrane/plastic border, which
+    creates sharp transitions that inflate the noise floor and spawn spurious
+    peaks -- out of the analysed region. Being symmetric, the analysed strip
+    stays centred under the calibration box.
+    """
+    h, w = results_window.shape[:2]
+    margin = int(CAL_STRIP_MARGIN_FRAC * w)
+
+    return (margin, int(STRIP_Y0_FRAC * h), w - margin, int(STRIP_Y1_FRAC * h))
 
 
 def extract_strip_roi(results_window):
@@ -299,9 +351,139 @@ def pick_peak_near(profile, candidates, expected_frac, radius_frac):
     return best
 
 
-def pick_t_c_from_peaks(profile, candidates):
-    t_idx = pick_peak_near(profile, candidates, EXPECTED_T_FRAC, SEARCH_RADIUS_FRAC)
-    c_idx = pick_peak_near(profile, candidates, EXPECTED_C_FRAC, SEARCH_RADIUS_FRAC)
+def snap_to_peak(profile, expected_frac, radius_frac):
+    """
+    Position of the tallest local maximum within `radius_frac` of the expected
+    fractional position -- the visible peak nearest where the band should be.
+
+    Unlike the candidate picker this ignores band width, so a broad band that
+    width-filtering would drop is still located; SNR decides presence. Returns
+    None only if the window contains no local maximum (a flat region).
+    """
+    n = len(profile)
+
+    expected = int(expected_frac * n)
+    radius = int(radius_frac * n)
+
+    # i-1 and i+1 are read below, so keep i within [1, n-2]
+    lo = max(1, expected - radius)
+    hi = min(n - 2, expected + radius)
+
+    best = None
+    best_height = -1e18
+
+    for i in range(lo, hi + 1):
+        # A local maximum with real relief on at least one side, so a flat
+        # (saturated) region is not mistaken for a peak.
+        rises = profile[i] >= profile[i - 1] and profile[i] >= profile[i + 1]
+        strict = profile[i] > profile[i - 1] or profile[i] > profile[i + 1]
+
+        if rises and strict and profile[i] > best_height:
+            best_height = profile[i]
+            best = i
+
+    return best
+
+
+def snap_t_c(profile, test_frac, control_frac, radius_frac=SEARCH_RADIUS_FRAC):
+    """
+    Locate the test and control bands by snapping to the tallest peak near each
+    calibrated position. For the fixed-rig path, where the positions are known
+    and the width filter only gets in the way.
+    """
+    t_idx = None if test_frac is None else snap_to_peak(profile, test_frac, radius_frac)
+    c_idx = None if control_frac is None else snap_to_peak(profile, control_frac, radius_frac)
+
+    # If both snapped to the same peak, keep it as the control (the anchor).
+    if t_idx is not None and t_idx == c_idx:
+        t_idx = None
+
+    return t_idx, c_idx
+
+
+def dominant_two_bands(profile, candidates, min_sep_frac=MIN_TC_SEPARATION_FRAC):
+    """
+    The strongest candidate peaks that are far enough apart to be a real band
+    pair, returned ordered left-to-right by position (0, 1, or 2 of them).
+
+    For a calibrated fixed rig this locates the control and test bands with no
+    assumed positions; the caller labels them from the known control side.
+    """
+    if not candidates:
+        return []
+
+    min_sep = int(min_sep_frac * len(profile))
+
+    chosen = [candidates[0]]
+
+    for idx in candidates[1:]:
+        if all(abs(idx - c) >= min_sep for c in chosen):
+            chosen.append(idx)
+
+            if len(chosen) == 2:
+                break
+
+    return sorted(chosen)
+
+
+def control_side_of(test_frac, control_frac):
+    """
+    Which side of the strip the control sits on, from the calibrated positions.
+    """
+    if control_frac is None:
+        if test_frac is None:
+            return "left"
+        return "left" if test_frac >= 0.5 else "right"
+    if test_frac is None:
+        return "left" if control_frac < 0.5 else "right"
+    return "left" if control_frac <= test_frac else "right"
+
+
+def find_t_c(profile, control_side):
+    """
+    Locate the test and control bands from the two dominant peaks, labelled by
+    which side the control is on.
+
+    Placement-invariant: it finds the bands wherever they sit in the strip, so
+    the cassette need not be in the exact calibrated position (a fresh placement
+    that shifts the peaks a little still detects). Uses raw peaks so a broad
+    band is not lost to the width filter.
+    """
+    found = dominant_two_bands(profile, find_peak_candidates(profile))
+
+    if len(found) == 2:
+        left, right = found
+        return (right, left) if control_side == "left" else (left, right)
+
+    if len(found) == 1:
+        idx = found[0]
+        on_left = idx < len(profile) / 2
+        is_control = on_left == (control_side == "left")
+        return (None, idx) if is_control else (idx, None)
+
+    return None, None
+
+
+def pick_t_c_from_peaks(
+    profile,
+    candidates,
+    test_frac=EXPECTED_T_FRAC,
+    control_frac=EXPECTED_C_FRAC,
+    radius_frac=SEARCH_RADIUS_FRAC
+):
+    """
+    Assign test and control bands by searching near their expected fractional
+    positions. For a fixed rig those come from calibration; otherwise they are
+    the module defaults. A None fraction means that band is not searched for.
+    """
+    t_idx = (
+        None if test_frac is None
+        else pick_peak_near(profile, candidates, test_frac, radius_frac)
+    )
+    c_idx = (
+        None if control_frac is None
+        else pick_peak_near(profile, candidates, control_frac, radius_frac)
+    )
 
     if t_idx is not None and c_idx is not None:
         min_sep = int(MIN_TC_SEPARATION_FRAC * len(profile))
@@ -320,18 +502,25 @@ def pick_t_c_from_peaks(profile, candidates):
     return t_idx, c_idx
 
 
-def band_background(profile, idx, half_width=6):
+def band_background(profile, idx, half_width=6, exclude=()):
     """
     Profile samples far enough from the band at `idx` to estimate the local
     baseline and noise without the band contaminating them.
+
+    `exclude` lists other band positions to also mask out -- otherwise a second
+    band counts as "noise" and inflates the estimate, deflating this band's SNR.
     """
     n = len(profile)
 
     mask = np.ones(n, dtype=bool)
-    mask[
-        max(0, idx - 3 * half_width):
-        min(n, idx + 3 * half_width + 1)
-    ] = False
+
+    for centre in (idx,) + tuple(exclude):
+        if centre is None:
+            continue
+        mask[
+            max(0, centre - 3 * half_width):
+            min(n, centre + 3 * half_width + 1)
+        ] = False
 
     background = profile[mask]
 
@@ -341,7 +530,7 @@ def band_background(profile, idx, half_width=6):
     return background
 
 
-def band_peak_height(profile, idx, half_width=6):
+def band_peak_height(profile, idx, half_width=6, exclude=()):
     """
     Peak height above the local baseline, in whatever units `profile` carries.
     """
@@ -354,12 +543,12 @@ def band_peak_height(profile, idx, half_width=6):
     hi = min(n, idx + half_width + 1)
 
     peak = float(np.max(profile[lo:hi]))
-    baseline = float(np.median(band_background(profile, idx, half_width)))
+    baseline = float(np.median(band_background(profile, idx, half_width, exclude)))
 
     return peak - baseline
 
 
-def band_area(profile, idx, half_width=6, frac=0.5):
+def band_area(profile, idx, half_width=6, frac=0.5, exclude=()):
     """
     Integrated signal above the local baseline across the band.
 
@@ -371,7 +560,7 @@ def band_area(profile, idx, half_width=6, frac=0.5):
     if idx is None:
         return 0.0
 
-    baseline = float(np.median(band_background(profile, idx, half_width)))
+    baseline = float(np.median(band_background(profile, idx, half_width, exclude)))
 
     left, right = band_extent(profile, idx, frac)
 
@@ -381,18 +570,48 @@ def band_area(profile, idx, half_width=6, frac=0.5):
     return float(np.sum(np.clip(segment, 0.0, None)))
 
 
-def band_signal_snr(profile, idx, half_width=6):
+def band_rgb(strip_bgr, idx, half_width=6):
     """
-    Return band strength and signal-to-noise ratio.
+    Median (R, G, B) of the darkest pixels in the band at `idx` -- the colour of
+    the line at its densest. Returns None if there is no band.
+
+    The darkest half of the band region is used so the surrounding lighter
+    membrane does not wash the colour out.
+    """
+    if idx is None:
+        return None
+
+    w = strip_bgr.shape[1]
+    lo = max(0, idx - half_width)
+    hi = min(w, idx + half_width + 1)
+
+    region = strip_bgr[:, lo:hi].reshape(-1, 3).astype(np.float32)
+
+    if region.shape[0] == 0:
+        return None
+
+    luminance = region.sum(axis=1)
+    k = max(1, region.shape[0] // 2)
+    darkest = region[np.argsort(luminance)[:k]]
+
+    b, g, r = np.median(darkest, axis=0)
+
+    return (int(round(r)), int(round(g)), int(round(b)))
+
+
+def band_signal_snr(profile, idx, half_width=6, exclude=()):
+    """
+    Return band strength and signal-to-noise ratio. `exclude` masks other bands
+    out of the noise estimate so they do not deflate this band's SNR.
     """
     if idx is None:
         return 0.0, 0.0
 
-    background = band_background(profile, idx, half_width)
+    background = band_background(profile, idx, half_width, exclude)
 
     baseline = float(np.median(background))
 
-    strength = band_peak_height(profile, idx, half_width)
+    strength = band_peak_height(profile, idx, half_width, exclude)
 
     # Robust noise estimate
     noise = float(
@@ -418,6 +637,7 @@ class BandReading:
     present: bool
     area: float = 0.0
     peak_a: float = 0.0
+    rgb: Optional[tuple] = None
 
 
 @dataclass
@@ -441,24 +661,57 @@ class FrameResult:
     tc_area_ratio: float = 0.0
 
 
-def analyze(frame):
+def analyze(frame, window_quad=None, bands=None):
     """
-    Locate the cassette and measure the test and control bands.
+    Measure the test and control bands in one frame.
 
-    Returns a FrameResult, or None if no cassette was found.
+    With `window_quad` (four points bounding the results window in frame
+    coordinates, e.g. from a fixed-rig calibration) the window is warped
+    directly and no cassette detection happens -- so it works even when most
+    of the cassette is out of frame. Without it, the full cassette is detected
+    and its results window taken as a fixed fraction of the warp.
+
+    `bands` is an optional (test_frac, control_frac) pair giving the expected
+    band positions along the strip, as learned during calibration. Without it
+    the module defaults are used.
+
+    Returns a FrameResult, or None if no cassette was found (detection path).
     """
-    quad = find_cassette_quad(frame)
+    if window_quad is not None:
+        quad = np.asarray(window_quad, dtype=np.float32)
+        warped = warp_quad(frame, quad, WINDOW_CANON_W, WINDOW_CANON_H)
+        window_bounds = (0, 0, WINDOW_CANON_W, WINDOW_CANON_H)
+        results_window = warped
+        # Analyse the full marked box, so it matches the calibration.
+        strip_rect = calibrated_strip_bounds(results_window)
+    else:
+        quad = find_cassette_quad(frame)
 
-    if quad is None:
-        return None
+        if quad is None:
+            return None
 
-    warped = warp_cassette(frame, quad)
+        warped = warp_cassette(frame, quad)
 
-    x0, y0, x1, y1 = results_window_bounds()
-    results_window = warped[y0:y1, x0:x1]
+        x0, y0, x1, y1 = results_window_bounds()
+        window_bounds = (x0, y0, x1, y1)
+        results_window = warped[y0:y1, x0:x1]
+        strip_rect = strip_bounds(results_window)
 
+    return _measure_strip(results_window, warped, quad, window_bounds, strip_rect, bands)
+
+
+def _measure_strip(results_window, warped, quad, window_bounds, strip_rect, bands=None):
+    """
+    Shared measurement core for both the detection and calibration paths.
+    """
+    if bands is not None:
+        test_frac, control_frac = bands
+    else:
+        test_frac, control_frac = EXPECTED_T_FRAC, EXPECTED_C_FRAC
+
+    sx0, sy0, sx1, sy1 = strip_rect
     # Copy: the result must stay valid even if the caller later draws on `warped`
-    strip_roi = extract_strip_roi(results_window).copy()
+    strip_roi = results_window[sy0:sy1, sx0:sx1].copy()
 
     # Detection runs on the normalised profile; density on the raw one
     raw_profile = raw_redness_profile(strip_roi)
@@ -467,16 +720,27 @@ def analyze(frame):
 
     candidates = filter_band_candidates(profile)
 
-    t_idx, c_idx = pick_t_c_from_peaks(profile, candidates)
+    if bands is not None:
+        # Calibrated: find the two dominant peaks and label them by the control
+        # side. Placement-invariant, so a fresh cassette that shifts the peaks a
+        # little still detects, and a broad band is not lost to the width filter.
+        t_idx, c_idx = find_t_c(profile, control_side_of(test_frac, control_frac))
+    else:
+        t_idx, c_idx = pick_t_c_from_peaks(profile, candidates, test_frac, control_frac)
 
-    t_strength, t_snr = band_signal_snr(profile, t_idx)
-    c_strength, c_snr = band_signal_snr(profile, c_idx)
+    # Each band excludes the other from its noise/baseline, so two strong bands
+    # do not deflate each other's SNR.
+    t_strength, t_snr = band_signal_snr(profile, t_idx, exclude=(c_idx,))
+    c_strength, c_snr = band_signal_snr(profile, c_idx, exclude=(t_idx,))
 
-    t_area = band_area(raw_profile, t_idx)
-    c_area = band_area(raw_profile, c_idx)
+    t_area = band_area(raw_profile, t_idx, exclude=(c_idx,))
+    c_area = band_area(raw_profile, c_idx, exclude=(t_idx,))
 
-    t_peak_a = band_peak_height(raw_profile, t_idx)
-    c_peak_a = band_peak_height(raw_profile, c_idx)
+    t_peak_a = band_peak_height(raw_profile, t_idx, exclude=(c_idx,))
+    c_peak_a = band_peak_height(raw_profile, c_idx, exclude=(t_idx,))
+
+    t_rgb = band_rgb(strip_roi, t_idx)
+    c_rgb = band_rgb(strip_roi, c_idx)
 
     control_present = c_snr >= CONTROL_SNR_THRESHOLD
     test_present = t_snr >= TEST_SNR_THRESHOLD and control_present
@@ -496,13 +760,13 @@ def analyze(frame):
     return FrameResult(
         quad=quad,
         warped=warped,
-        window_bounds=(x0, y0, x1, y1),
-        strip_rect=strip_bounds(results_window),
+        window_bounds=window_bounds,
+        strip_rect=strip_rect,
         strip_roi=strip_roi,
         profile=profile,
         candidates=candidates,
-        test=BandReading(t_idx, t_strength, t_snr, test_present, t_area, t_peak_a),
-        control=BandReading(c_idx, c_strength, c_snr, control_present, c_area, c_peak_a),
+        test=BandReading(t_idx, t_strength, t_snr, test_present, t_area, t_peak_a, t_rgb),
+        control=BandReading(c_idx, c_strength, c_snr, control_present, c_area, c_peak_a, c_rgb),
         tc_ratio=tc_ratio,
         raw_profile=raw_profile,
         scale=scale,
@@ -532,3 +796,26 @@ class StabilityTracker:
     @property
     def stable_control(self):
         return sum(self.recent_control) >= self.votes
+
+
+class Hysteresis:
+    """
+    Sticky threshold: turns True when the value reaches `on_threshold` and stays
+    True until it drops below `off_threshold`. Keeps a faint band from
+    flickering in and out of detection near a single threshold.
+    """
+
+    def __init__(self, on_threshold, off_threshold):
+        self.on = on_threshold
+        self.off = off_threshold
+        self.state = False
+
+    def update(self, value):
+        self.state = value >= self.off if self.state else value >= self.on
+        return self.state
+
+
+def apply_hysteresis(values, on_threshold, off_threshold):
+    """Hysteresis over a whole series -- for re-deriving detection in analysis."""
+    gate = Hysteresis(on_threshold, off_threshold)
+    return np.array([gate.update(float(v)) for v in values], dtype=bool)

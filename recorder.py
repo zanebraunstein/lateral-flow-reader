@@ -77,6 +77,8 @@ class RunRecorder:
         self.times.append(elapsed)
         self.profiles.append(np.asarray(result.profile, dtype=np.float32))
 
+        test_rgb = result.test.rgb or (-1, -1, -1)
+
         self.readings.append((
             -1 if result.test.idx is None else result.test.idx,
             -1 if result.control.idx is None else result.control.idx,
@@ -92,7 +94,10 @@ class RunRecorder:
             result.tc_area_ratio,
             result.test.peak_a,
             result.control.peak_a,
-            result.scale
+            result.scale,
+            test_rgb[0],
+            test_rgb[1],
+            test_rgb[2],
         ))
 
         # Recording is best-effort: a write failure must never abort a run
@@ -171,7 +176,11 @@ class RunRecorder:
             test_peak_a=readings[:, 12],
             control_peak_a=readings[:, 13],
             # `profiles` are normalised; multiply by this to get raw a* units
-            profile_scale=readings[:, 14]
+            profile_scale=readings[:, 14],
+            # Test line colour at its darkest pixels (-1 if no band that frame)
+            test_r=readings[:, 15].astype(np.int16),
+            test_g=readings[:, 16].astype(np.int16),
+            test_b=readings[:, 17].astype(np.int16),
         )
 
     def summary(self):

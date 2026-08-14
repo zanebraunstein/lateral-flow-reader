@@ -12,12 +12,24 @@ import synth
 
 
 def run_loop(monkeypatch, tmp_path, fake_camera, frames, duration=1.5, **recorder_kwargs):
+    import cv2 as cv
+
     import main
 
     fake_camera.frames = frames
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(main, "RUN_DURATION_S", duration)
+
+    # Leave the preview phase immediately with 'g', then let the timed run end
+    # itself (0xFF is "no key").
+    calls = {"n": 0}
+
+    def wait_key(delay):
+        calls["n"] += 1
+        return ord("g") if calls["n"] == 1 else 0xFF
+
+    monkeypatch.setattr(cv, "waitKey", wait_key)
 
     if recorder_kwargs:
         monkeypatch.setattr(
@@ -83,6 +95,9 @@ def test_display_windows_are_drawn(monkeypatch, tmp_path, fake_camera, headless)
 
 
 def test_recorded_run_analyses_end_to_end(monkeypatch, tmp_path, fake_camera, headless):
+    import strip
+    monkeypatch.setattr(strip, "TEST_WARMUP_S", 0.0)   # tiny synthetic run
+
     run_dir = run_loop(monkeypatch, tmp_path, fake_camera, developing_run())
 
     result = analysis.analyze_run(run_dir, bin_s=0.05)
@@ -107,6 +122,86 @@ def test_run_without_a_cassette_records_nothing(monkeypatch, tmp_path, fake_came
     assert not os.path.exists(os.path.join(run_dir, "profiles.npz"))
 
 
+def test_quit_from_preview_starts_no_run(monkeypatch, tmp_path, fake_camera, headless):
+    """
+    Pressing 'q' in the preview must not create a run directory or record.
+    """
+    import cv2 as cv
+    import main
+
+    fake_camera.frames = developing_run(n=5)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cv, "waitKey", lambda delay: ord("q"))
+
+    main.main()
+
+    assert not os.path.isdir("runs") or os.listdir("runs") == []
+
+
+def test_camera_is_released_after_a_normal_run(monkeypatch, tmp_path, fake_camera, headless):
+    """
+    The preview -> record -> cleanup path releases the camera when done.
+    """
+    import main
+
+    cameras = []
+    original = main.start_camera
+    monkeypatch.setattr(
+        main, "start_camera",
+        lambda: cameras.append(original()) or cameras[-1]
+    )
+
+    run_loop(monkeypatch, tmp_path, fake_camera, developing_run(), duration=0.5)
+
+    assert cameras and cameras[0].stopped
+
+
+def test_disk_full_stops_the_run_and_keeps_data(monkeypatch, tmp_path, fake_camera, headless, capsys):
+    """
+    A full disk during recording must stop cleanly (loud message), not crash,
+    and keep the rows written before it filled.
+    """
+    import errno as errno_mod
+
+    import cv2 as cv
+    import main
+
+    fake_camera.frames = developing_run(n=60)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(main, "RUN_DURATION_S", 5.0)
+
+    keys = {"n": 0}
+    monkeypatch.setattr(cv, "waitKey", lambda d: (keys.__setitem__("n", keys["n"] + 1),
+                                                  ord("g") if keys["n"] == 1 else 0xFF)[1])
+
+    # Let a few rows through (incl. the header), then ENOSPC on every write.
+    calls = {"n": 0}
+
+    class FullDisk:
+        def __init__(self, writer):
+            self._w = writer
+
+        def writerow(self, row):
+            calls["n"] += 1
+            if calls["n"] > 4:
+                raise OSError(errno_mod.ENOSPC, "No space left on device")
+            return self._w.writerow(row)
+
+    real_csv_writer = main.csv.writer
+    monkeypatch.setattr(main.csv, "writer", lambda f: FullDisk(real_csv_writer(f)))
+
+    main.main()
+
+    out = capsys.readouterr().out
+    assert "disk full" in out.lower()
+
+    run_dir = os.path.join(str(tmp_path), "runs", sorted(os.listdir("runs"))[-1])
+    with open(os.path.join(run_dir, "signal_log.csv")) as handle:
+        rows = list(csv.DictReader(handle))
+
+    assert 0 < len(rows) <= 4       # kept what was written before the disk filled
+
+
 def test_camera_is_released_when_the_loop_raises(monkeypatch, tmp_path, fake_camera, headless):
     """
     The cleanup path exists so a crash cannot leave the camera held.
@@ -125,7 +220,9 @@ def test_camera_is_released_when_the_loop_raises(monkeypatch, tmp_path, fake_cam
         return camera
 
     monkeypatch.setattr(main, "start_camera", tracking_start)
-    monkeypatch.setattr(main.strip, "analyze", lambda frame: 1 / 0)
+    monkeypatch.setattr(
+        main.strip, "analyze", lambda frame, window_quad=None, bands=None: 1 / 0
+    )
 
     try:
         main.main()

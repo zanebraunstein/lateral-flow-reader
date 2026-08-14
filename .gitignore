@@ -220,3 +220,7 @@ __marimo__/
 # Recorded assay runs (large; each run is experiment data, not source)
 runs/
 signal_log.csv
+
+# Rig-specific calibration (physical setup, not source)
+calibration.json
+calibration.jpg

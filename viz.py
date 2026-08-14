@@ -28,17 +28,21 @@ def draw_band_line_on_main(
     y0,
     y1,
     label,
-    color
+    color,
+    canon_w=CANON_W,
+    canon_h=CANON_H
 ):
     """
-    Project a band position from canonical cassette space back onto the
-    live camera view.
+    Project a band position from canonical warped space back onto the live
+    camera view. `canon_w`/`canon_h` are the dimensions of the warp `quad`
+    maps to -- the full cassette when detecting, the results window when
+    calibrated.
     """
     dst = np.array([
         [0, 0],
-        [CANON_W - 1, 0],
-        [CANON_W - 1, CANON_H - 1],
-        [0, CANON_H - 1]
+        [canon_w - 1, 0],
+        [canon_w - 1, canon_h - 1],
+        [0, canon_h - 1]
     ], dtype=np.float32)
 
     Minv = cv.getPerspectiveTransform(
@@ -168,68 +172,45 @@ def draw_searching(disp):
     cv.putText(disp, "Searching...", (20, 40), FONT, 1.0, COLOR_SEARCHING, 2)
 
 
-def draw_readout(
-    disp,
-    t_strength,
-    c_strength,
-    tc_ratio,
-    t_snr,
-    c_snr,
-    test_present,
-    control_present,
-    stable_test,
-    stable_control
-):
+def draw_timer(disp, elapsed, total_seconds=None):
     """
-    Numeric readout and detection state, drawn every frame a cassette is seen.
+    Elapsed run time (mm:ss), top-right of the main view. With total_seconds
+    it also shows the target, e.g. "02:14 / 15:00".
     """
-    def yes_no(flag):
-        return "YES" if flag else "NO"
+    mins, secs = divmod(int(elapsed), 60)
+    text = f"{mins:02d}:{secs:02d}"
 
-    cv.putText(
-        disp,
-        f"T={t_strength:.2f}  C={c_strength:.2f}  T/C={tc_ratio:.2f}",
-        (20, 80),
-        FONT,
-        0.7,
-        COLOR_TEXT,
-        2
-    )
+    if total_seconds:
+        text += f" / {int(total_seconds) // 60:02d}:00"
 
-    cv.putText(
-        disp,
-        (
-            f"T SNR={t_snr:.1f}  "
-            f"C SNR={c_snr:.1f}  "
-            f"C={yes_no(control_present)}  "
-            f"T={yes_no(test_present)}"
-        ),
-        (20, 110),
-        FONT,
-        0.65,
-        COLOR_TEXT,
-        2
-    )
+    (tw, _), _ = cv.getTextSize(text, FONT, 1.0, 2)
+    cv.putText(disp, text, (disp.shape[1] - tw - 20, 48), FONT, 1.0, COLOR_TEXT, 2)
 
-    cv.putText(
-        disp,
-        f"Stable Control: {yes_no(stable_control)}",
-        (20, 140),
-        FONT,
-        0.6,
-        COLOR_CONTROL,
-        2
-    )
 
-    cv.putText(
-        disp,
-        f"Stable Test: {yes_no(stable_test)}",
-        (20, 170),
-        FONT,
-        0.6,
-        COLOR_TEST,
-        2
-    )
+def draw_readout(disp, tc_ratio, t_snr, c_snr, stable_test, stable_control):
+    """
+    Two-line verdict, using the debounced (stable) detections. The control line
+    reports validity; the test line reports the result. SNRs are shown as a
+    confidence hint; the full per-frame numbers live in the CSV.
+    """
+    # Control = validity
+    if stable_control:
+        control_text, control_color = f"Control: VALID   (SNR {c_snr:.1f})", COLOR_CONTROL
+    else:
+        control_text, control_color = f"Control: waiting   (SNR {c_snr:.1f})", COLOR_SEARCHING
+
+    cv.putText(disp, control_text, (20, 85), FONT, 0.8, control_color, 2)
+
+    # Test = result, only meaningful once the control is valid
+    if not stable_control:
+        test_text, test_color = "Test: --", COLOR_TEXT
+    elif stable_test:
+        test_text = f"Test: POSITIVE   T/C={tc_ratio:.2f}   (SNR {t_snr:.1f})"
+        test_color = COLOR_TEST
+    else:
+        test_text, test_color = "Test: negative", COLOR_TEXT
+
+    cv.putText(disp, test_text, (20, 120), FONT, 0.8, test_color, 2)
 
 
 def render(frame, result, stable_test=False, stable_control=False):
@@ -251,11 +232,17 @@ def render(frame, result, stable_test=False, stable_control=False):
     x0, y0, x1, y1 = result.window_bounds
     sx0, sy0, sx1, sy1 = result.strip_rect
 
+    # The warp `result.quad` maps to may be the full cassette or just the
+    # results window; project band lines back using its actual dimensions.
+    canon_h, canon_w = result.warped.shape[:2]
+
     for band, label, color in (
         (result.control, "C", COLOR_CONTROL),
         (result.test, "T", COLOR_TEST)
     ):
-        if band.idx is not None:
+        # Only mark a band the reader is actually confident in, so a peak
+        # snapped onto noise does not draw a misleading line.
+        if band.idx is not None and band.present:
             draw_band_line_on_main(
                 disp,
                 result.quad,
@@ -263,18 +250,16 @@ def render(frame, result, stable_test=False, stable_control=False):
                 y0,
                 y1,
                 label,
-                color
+                color,
+                canon_w,
+                canon_h
             )
 
     draw_readout(
         disp,
-        result.test.strength,
-        result.control.strength,
         result.tc_ratio,
         result.test.snr,
         result.control.snr,
-        result.test.present,
-        result.control.present,
         stable_test,
         stable_control
     )
@@ -293,8 +278,8 @@ def render(frame, result, stable_test=False, stable_control=False):
     mark_bands_on_profile(
         profile_vis,
         result.profile,
-        result.test.idx,
-        result.control.idx,
+        result.test.idx if result.test.present else None,
+        result.control.idx if result.control.present else None,
         result.candidates
     )
 

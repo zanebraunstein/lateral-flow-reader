@@ -114,6 +114,75 @@ def find_plateau(t, y, tail_s=PLATEAU_TAIL_S, frac=PLATEAU_FRAC):
     return float(t[reached[0]]), level
 
 
+def reached_plateau(t, y, tail_s=PLATEAU_TAIL_S, slope_frac=0.1):
+    """
+    True if the curve has flattened by the end: the rise over the last `tail_s`
+    is a small fraction of the whole rise. False means it was still developing
+    when the run stopped (so the rate should run to the end, not a plateau).
+    """
+    if len(t) < 3:
+        return False
+
+    overall = float(np.max(y) - np.min(y))
+    if overall <= 0:
+        return False
+
+    tail = t >= (t[-1] - tail_s)
+    if tail.sum() < 2:
+        return False
+
+    tail_slope = np.polyfit(t[tail], y[tail], 1)[0]
+    tail_rise = abs(tail_slope) * (t[-1] - t[tail][0])
+
+    return tail_rise < slope_frac * overall
+
+
+def test_line_rgb(data):
+    """
+    (R, G, B) of the test line at its darkest point over the run -- the frame
+    where the test band was most developed (largest area). None if the colour
+    was not recorded (older run) or no test line was ever seen.
+    """
+    if "test_r" not in data:
+        return None
+
+    present = np.asarray(data["test_present"], dtype=bool)
+    have_rgb = np.asarray(data["test_r"]) >= 0
+    usable = present & have_rgb
+
+    if not usable.any():
+        return None
+
+    area = np.asarray(data["test_area"], dtype=float)
+    # darkest = most developed; restrict to frames with a real, coloured band
+    idx = int(np.where(usable, area, -np.inf).argmax())
+
+    return (int(data["test_r"][idx]), int(data["test_g"][idx]), int(data["test_b"][idx]))
+
+
+def development_start(t, y, lo_frac=0.15):
+    """
+    When `y` first rose past `lo_frac` of its total rise (min -> tail level).
+    Used as a fallback rate start when the positivity latch never fired but the
+    density clearly developed. Returns None if there was no rise.
+    """
+    if len(t) < 2:
+        return None
+
+    baseline = float(np.min(y))
+
+    tail = y[t >= (t[-1] - PLATEAU_TAIL_S)]
+    level = float(np.median(tail)) if tail.size else float(np.max(y))
+
+    if level - baseline <= 0:
+        return None
+
+    threshold = baseline + lo_frac * (level - baseline)
+    above = np.where(y >= threshold)[0]
+
+    return float(t[above[0]]) if above.size else None
+
+
 def fit_rate(t, y, t0, t1):
     """
     Least-squares slope of y over [t0, t1], with R^2 so a badly non-linear
@@ -153,9 +222,17 @@ def analyze_run(run_dir, test_snr=None, control_snr=None, bin_s=BIN_SECONDS):
     if t.size == 0:
         return {"run_dir": run_dir, "frames": 0, "error": "run contains no frames"}
 
-    # Re-derive detection from stored SNRs so thresholds are tunable here
-    control_present = d["control_snr"] >= control_snr
-    test_present = (d["test_snr"] >= test_snr) & control_present
+    # Re-derive detection from stored SNRs so thresholds are tunable here, with
+    # hysteresis so a faint line does not flicker in and out. Ignore the test
+    # line during the warmup: the initial sample flow can read as a line before
+    # the real one develops.
+    hf = strip.SNR_HYSTERESIS_FRAC
+    control_present = strip.apply_hysteresis(d["control_snr"], control_snr, control_snr * hf)
+    # Zero the test SNR during the warmup before the hysteresis runs, so the
+    # initial flow cannot leave the gate stuck on past the warmup.
+    test_snr_series = np.where(t >= strip.TEST_WARMUP_S, d["test_snr"], 0.0)
+    test_detected = strip.apply_hysteresis(test_snr_series, test_snr, test_snr * hf)
+    test_present = test_detected & control_present
 
     control_onset, _ = latch_time(t, control_present)
     onset, confirmed = latch_time(t, test_present)
@@ -184,24 +261,66 @@ def analyze_run(run_dir, test_snr=None, control_snr=None, bin_s=BIN_SECONDS):
     _, ratio_level = find_plateau(tb, ratio)
     _, peak_level = find_plateau(tb, peak)
 
+    plateaued = reached_plateau(tb, area)
+
     out["density"] = {
         "test_area_a": area_level,
         "test_peak_a": peak_level,
         "tc_area_ratio": ratio_level,
-        "plateau_reached_s": t_plateau,
+        # Only a genuine flattening counts as a plateau time.
+        "plateau_reached_s": t_plateau if plateaued else None,
+        # Test line colour at its darkest (most developed) point.
+        "test_rgb": test_line_rgb(d),
     }
 
-    area_rate, area_r2 = fit_rate(tb, area, onset, t_plateau)
-    ratio_rate, ratio_r2 = fit_rate(tb, ratio, onset, t_plateau)
+    t_end = float(tb[-1]) if len(tb) else None
+
+    # Rate start: the positivity onset if the line firmly latched, otherwise
+    # where the density began rising -- so a faint-but-developing line still
+    # yields a rate. Require the line to have been seen (present) in a few
+    # frames, so a negative's noise does not produce a spurious rate.
+    line_seen = int(np.sum(test_present)) >= 3
+    latched = onset is not None
+    if latched:
+        rate_start = onset
+    elif line_seen:
+        rate_start = development_start(tb, area)
+    else:
+        rate_start = None
+
+    # Never start the rate inside the warmup window (initial flow).
+    if rate_start is not None:
+        rate_start = max(rate_start, float(strip.TEST_WARMUP_S))
+
+    # End of the rate interval: the plateau only if it flattened AND lands after
+    # the start (a faint noisy line can "plateau" before onset); otherwise the
+    # end of the run.
+    if (plateaued and t_plateau is not None
+            and (rate_start is None or t_plateau > rate_start)):
+        interval_end = t_plateau
+    else:
+        interval_end = t_end
+
+    area_rate, area_r2 = fit_rate(tb, area, rate_start, interval_end)
+    ratio_rate, ratio_r2 = fit_rate(tb, ratio, rate_start, interval_end)
+
+    # Too few binned points (stopped very soon after onset)? Fit the raw
+    # per-frame series, which always has enough points.
+    if area_rate is None and rate_start is not None and interval_end is not None \
+            and interval_end > rate_start:
+        area_rate, area_r2 = fit_rate(t, d["test_area"], rate_start, interval_end)
+        ratio_rate, ratio_r2 = fit_rate(t, d["tc_area_ratio"], rate_start, interval_end)
 
     endpoint = None
-    if onset is not None and t_plateau is not None and t_plateau > onset:
-        a0 = float(np.interp(onset, tb, area))
-        a1 = float(np.interp(t_plateau, tb, area))
-        endpoint = (a1 - a0) / (t_plateau - onset)
+    if rate_start is not None and interval_end is not None and interval_end > rate_start:
+        a0 = float(np.interp(rate_start, tb, area))
+        a1 = float(np.interp(interval_end, tb, area))
+        endpoint = (a1 - a0) / (interval_end - rate_start)
 
     out["rate"] = {
-        "interval_s": [onset, t_plateau],
+        "interval_s": [rate_start, interval_end],
+        "plateaued": plateaued,
+        "latched": latched,
         "test_area_per_s": area_rate,
         "test_area_r2": area_r2,
         "endpoint_area_per_s": endpoint,
@@ -251,18 +370,22 @@ def format_report(r):
     lines.append("")
 
     d = r["density"]
+    rgb = d.get("test_rgb")
+    rgb_text = f"({rgb[0]}, {rgb[1]}, {rgb[2]})" if rgb else "--"
     lines += [
         "Band density (raw a* units, plateau = median of run tail)",
         f"  T area          {_fmt(d['test_area_a'], '.2f')} a*.px",
         f"  T peak          {_fmt(d['test_peak_a'], '.2f')} a*",
         f"  T/C area ratio  {_fmt(d['tc_area_ratio'], '.4f')}   <- compare across runs",
+        f"  T line RGB      {rgb_text}   (darkest point)",
         "",
     ]
 
     rt = r["rate"]
-    lines.append("Rate of change (onset -> plateau)")
+    endpoint = "plateau" if rt["plateaued"] else "stop (still rising)"
+    lines.append(f"Rate of change (onset -> {endpoint})")
     if rt["test_area_per_s"] is None:
-        lines.append("  not measurable (no onset, or no plateau reached)")
+        lines.append("  not measurable (no test line detected)")
     else:
         t0, t1 = rt["interval_s"]
         lines += [
@@ -273,6 +396,12 @@ def format_report(r):
             f"  T/C ratio rate  {_fmt(rt['tc_ratio_per_s'], '.6f')} /s"
             f"   (R^2 {_fmt(rt['tc_ratio_r2'], '.3f')})",
         ]
+        if not rt["latched"]:
+            lines.append("  note: line never firmly latched as positive; onset "
+                         "taken from where density began rising.")
+        if not rt["plateaued"]:
+            lines.append("  note: line had not plateaued; rate is over the "
+                         "development so far.")
 
     return "\n".join(lines)
 

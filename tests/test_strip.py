@@ -36,6 +36,44 @@ def test_blank_strip_finds_nothing():
     assert c_idx is None
 
 
+def test_snr_excludes_the_other_band_from_noise():
+    """
+    Two strong bands: counting one as noise deflates the other's SNR, so
+    excluding it must raise the SNR. This is what lets both bands of a strong
+    positive clear the detection threshold.
+    """
+    n = 200
+    xs = np.arange(n)
+    prof = 6.0 * np.exp(-((xs - 60) / 12.0) ** 2)
+    prof += 5.0 * np.exp(-((xs - 140) / 12.0) ** 2)
+
+    including = strip.band_signal_snr(prof, 60)[1]
+    excluding = strip.band_signal_snr(prof, 60, exclude=(140,))[1]
+
+    assert excluding > including
+
+
+def test_band_rgb_reads_the_line_colour():
+    # BGR strip, reddish band (low B/G, high R) at column 100
+    strip_bgr = np.full((20, 200, 3), 235, np.uint8)
+    strip_bgr[:, 95:106] = (40, 40, 210)      # B, G, R
+
+    r, g, b = strip.band_rgb(strip_bgr, 100)
+
+    assert r > 180 and g < 90 and b < 90       # returned as (R, G, B)
+
+
+def test_band_rgb_is_none_for_missing_band():
+    assert strip.band_rgb(np.full((20, 200, 3), 235, np.uint8), None) is None
+
+
+def test_analyze_records_the_test_line_colour():
+    result = strip.analyze(synth.cassette_frame(t_amp=60))
+
+    assert result.test.rgb is not None
+    assert len(result.test.rgb) == 3
+
+
 def test_snr_is_zero_for_missing_band():
     profile = strip.redness_profile(synth.strip_image([]))
 
@@ -84,9 +122,10 @@ def test_analyze_matches_hand_composed_primitives(amp):
     assert result.candidates == candidates
     assert result.test.idx == t_idx
     assert result.control.idx == c_idx
-    assert result.test.snr == strip.band_signal_snr(profile, t_idx)[1]
-    assert result.test.area == strip.band_area(raw, t_idx)
-    assert result.test.peak_a == strip.band_peak_height(raw, t_idx)
+    # each band excludes the other from its noise/baseline
+    assert result.test.snr == strip.band_signal_snr(profile, t_idx, exclude=(c_idx,))[1]
+    assert result.test.area == strip.band_area(raw, t_idx, exclude=(c_idx,))
+    assert result.test.peak_a == strip.band_peak_height(raw, t_idx, exclude=(c_idx,))
 
 
 def test_analyze_returns_none_without_cassette():
@@ -143,6 +182,30 @@ def _result(test_present, control_present=True):
         control=strip.BandReading(0, 0.0, 0.0, control_present),
         tc_ratio=0.0
     )
+
+
+def test_hysteresis_is_sticky_between_thresholds():
+    gate = strip.Hysteresis(on_threshold=4.0, off_threshold=2.4)
+
+    assert gate.update(3.0) is False       # below on -> stays off
+    assert gate.update(5.0) is True        # crosses on -> on
+    assert gate.update(3.0) is True        # above off -> stays on
+    assert gate.update(2.0) is False       # below off -> off
+    assert gate.update(3.0) is False       # below on -> stays off
+
+
+def test_apply_hysteresis_reduces_flicker():
+    snr = np.array([1, 5, 3, 5, 3, 3.5, 1], dtype=float)
+
+    plain = snr >= 4.0
+    sticky = strip.apply_hysteresis(snr, 4.0, 2.4)
+
+    plain_flips = int(np.sum(np.abs(np.diff(plain.astype(int)))))
+    sticky_flips = int(np.sum(np.abs(np.diff(sticky.astype(int)))))
+
+    assert sticky_flips < plain_flips
+    # once on at the first 5, it holds through the 3s (above off)
+    assert sticky[2] and sticky[4] and sticky[5]
 
 
 def test_stability_needs_repeated_detections():

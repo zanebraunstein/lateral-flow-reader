@@ -23,17 +23,29 @@ figure to compare between cassettes.
 
 ```
 camera frame
-  -> locate cassette (Canny + contour, largest convex quad)
-  -> perspective warp to a canonical 900x320 view
-  -> slice results window, then the strip ROI (fixed fractions of the warp)
+  -> locate the results window
+       calibrated fixed rig:  warp the marked window quad          (default)
+       or full-cassette:      Canny + largest convex quad -> warp
+  -> slice the strip ROI (fixed fractions of the warped window)
   -> LAB a* channel, Gaussian background subtraction, vertical median
      -> 1-D redness profile
   -> peak detection, band-width filtering, T/C assignment by expected position
   -> SNR gating, then temporal voting across frames
 ```
 
+There are two ways to locate the strip, and they feed identical downstream
+analysis:
+
+- **Fixed rig (recommended):** calibrate the results window once (see below).
+  Every frame warps that fixed region — no per-frame detection, so it works
+  even when most of the cassette is out of frame, and there is no detection
+  jitter in the measurement.
+- **Full-cassette detection:** used when there is no calibration. Finds the
+  whole cassette as a convex quad, which requires the entire cassette in frame
+  against a contrasting background.
+
 Working in a canonical warped space means every region of interest is a
-fraction rather than a pixel count, so the reader tolerates the camera moving.
+fraction rather than a pixel count.
 
 Two properties are load-bearing and worth knowing before changing anything:
 
@@ -50,15 +62,18 @@ Two properties are load-bearing and worth knowing before changing anything:
 
 | file | role |
 |---|---|
-| `main.py` | capture loop, CSV logging, run lifecycle |
+| `main.py` | preview, inline calibration, capture loop, run lifecycle |
 | `strip.py` | cassette geometry and all signal analysis (no camera, no display) |
 | `viz.py` | display overlays (draws only on copies) |
 | `recorder.py` | per-run capture of profiles and decimated frames |
 | `analysis.py` | offline analysis of a recorded run |
+| `plot.py` | plot a run's kinetics (matplotlib PNG) |
+| `plot_svg.py` | same plot as SVG, standard library only |
+| `calibration.py` | load/save calibration and learn band positions |
 | `tests/` | pytest suite, runs on a workstation |
 
-`strip.py`, `viz.py`, `recorder.py` and `analysis.py` import nothing
-Pi-specific, so everything except the capture loop can be developed and
+`strip.py`, `viz.py`, `recorder.py`, `analysis.py` and `calibration.py` import
+nothing Pi-specific, so everything except the capture loop can be developed and
 tested on a laptop.
 
 ## Install
@@ -85,18 +100,41 @@ python3 -m venv --system-site-packages .venv
 
 ## Running a test
 
+Everything is one command — calibration, preview, and the run:
+
 ```sh
 python3 main.py
 ```
 
-Point the camera at the cassette. The reader searches for it every frame and
-starts measuring as soon as it locks on. Live windows show the camera view
-with detected bands projected back onto it, the warped cassette, the strip
-ROI, and the 1-D signal profile.
+It opens in a **live preview** (not recording), showing the bands overlaid on
+the camera view:
 
-A run stops automatically after `RUN_DURATION_S` (15 minutes) so that runs are
-comparable and the plateau is well defined. `q` stops early; the summary line
-records which happened.
+- **`g`** — start the 15-minute recording run. Press it the moment you apply
+  the sample, so time-to-positivity is measured from the true start.
+- **`c`** — calibrate (see below). Only needed at first setup or if the rig moves.
+- **`q`** — quit without recording.
+
+A run stops automatically after `RUN_DURATION_S` (15 minutes) so runs are
+comparable and the plateau is well defined; `q` during a run stops it early.
+
+### Calibration (one time per rig)
+
+Calibration is a **setup step, not per-test** — once the camera and cassette
+position are fixed, the saved calibration is reused for every test of that
+cassette design. Press `c` in the preview with a reference cassette showing
+**both** lines (a used positive works well), then click the four corners of the
+results window — the bright membrane rectangle containing the C and T lines.
+
+The tool finds the two band positions from the cassette itself and labels them
+from the control side, so **either cassette orientation works** (C-left/T-right
+or the reverse) with no hand-tuned constants. Press `f` to flip which side is
+the control if the labels land wrong; a preview shows the strip and profile with
+the bands marked and reports the control SNR. Press `s` to save, `q` to cancel.
+
+This writes `calibration.json` (rig-specific, git-ignored): the window corners
+plus the learned control and test positions, loaded automatically on the next
+run. With no calibration, `g` records using full-cassette detection instead
+(needs the whole cassette in frame).
 
 Each run writes to its own timestamped directory — restarting the reader never
 overwrites previous data:
@@ -143,6 +181,29 @@ latch necessarily fires later than the line appears — `confirmed` is when it
 latched. And the rate comes with an R²: a low value means a single slope is a
 poor description of the rise, which is normal for a saturating curve.
 
+### Plotting a run
+
+```sh
+python3 plot.py                        # newest run -> writes plot.png into it
+python3 plot.py runs/20260812-113353
+python3 plot.py --show                 # open a window too
+python3 plot.py --test-snr 8           # re-score threshold before plotting
+```
+
+Two stacked panels over a shared time axis: **band density** (test and control
+in a* area) with time-to-positivity and plateau marked and the fitted rate
+annotated, and **detection SNR** with the threshold lines. Needs matplotlib
+(`pip install -r requirements-dev.txt`); it saves a PNG so it works headless
+over SSH, and can run off-Pi on a copied run directory.
+
+For a Pi with no room to install matplotlib, `plot_svg.py` produces the same
+two panels as an SVG using only the standard library — nothing to install.
+Open the resulting `plot.svg` in a browser.
+
+```sh
+python3 plot_svg.py            # newest run -> plot.svg in it
+```
+
 ## Validity
 
 A test line is only reported when the control line is also present, and a band
@@ -182,6 +243,6 @@ Validated end-to-end against synthetic data. Detection thresholds still need
 calibrating against real cassettes — record a run, then sweep thresholds
 offline with `analysis.py --test-snr`.
 
-Known limitation: the cassette quad is re-detected independently every frame,
-so the ROI jitters by a pixel or two between frames. That noise lands in the
-series used for the rate-of-change measurement.
+The fixed-rig calibration path holds the strip location constant, which removes
+the per-frame ROI jitter that the full-cassette detection path would otherwise
+introduce into the rate-of-change measurement.
