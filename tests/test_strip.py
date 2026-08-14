@@ -184,6 +184,30 @@ def _result(test_present, control_present=True):
     )
 
 
+def test_hysteresis_is_sticky_between_thresholds():
+    gate = strip.Hysteresis(on_threshold=4.0, off_threshold=2.4)
+
+    assert gate.update(3.0) is False       # below on -> stays off
+    assert gate.update(5.0) is True        # crosses on -> on
+    assert gate.update(3.0) is True        # above off -> stays on
+    assert gate.update(2.0) is False       # below off -> off
+    assert gate.update(3.0) is False       # below on -> stays off
+
+
+def test_apply_hysteresis_reduces_flicker():
+    snr = np.array([1, 5, 3, 5, 3, 3.5, 1], dtype=float)
+
+    plain = snr >= 4.0
+    sticky = strip.apply_hysteresis(snr, 4.0, 2.4)
+
+    plain_flips = int(np.sum(np.abs(np.diff(plain.astype(int)))))
+    sticky_flips = int(np.sum(np.abs(np.diff(sticky.astype(int)))))
+
+    assert sticky_flips < plain_flips
+    # once on at the first 5, it holds through the 3s (above off)
+    assert sticky[2] and sticky[4] and sticky[5]
+
+
 def test_stability_needs_repeated_detections():
     """
     A single noisy frame must not flip the reader to positive; that is the

@@ -102,6 +102,48 @@ def test_run_stopped_before_plateau_still_gives_a_rate(tmp_path):
     assert "still rising" in analysis.format_report(result)
 
 
+def _write_snr_run(tmp_path, t, test_snr):
+    """A profiles.npz driven by an explicit test-SNR series."""
+    import os
+
+    n = t.size
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    np.savez(
+        os.path.join(run_dir, "profiles.npz"),
+        time_seconds=t, profiles=np.zeros((n, 178), np.float32),
+        test_idx=np.full(n, 80, np.int32), control_idx=np.full(n, 142, np.int32),
+        test_strength=test_snr, control_strength=np.full(n, 20.0),
+        test_snr=test_snr, control_snr=np.full(n, 20.0),
+        tc_ratio=test_snr / 20, test_present=(test_snr >= 4).astype(np.int8),
+        control_present=np.ones(n, np.int8),
+        test_area=np.clip(test_snr, 0, None) * 10, control_area=np.full(n, 200.0),
+        tc_area_ratio=np.clip(test_snr, 0, None) / 20,
+        test_peak_a=test_snr, control_peak_a=np.full(n, 17.0),
+        profile_scale=np.full(n, 2.5),
+    )
+    return run_dir
+
+
+def test_faint_flickering_line_detects_continuously(tmp_path):
+    """
+    A faint test line whose SNR oscillates around the threshold must still be
+    detected (hysteresis keeps it from flickering in and out).
+    """
+    import strip
+
+    n = 600
+    t = np.arange(n) / 10.0
+    rng = np.random.default_rng(0)
+    base = np.where(t >= 30, strip.TEST_SNR_THRESHOLD, 0.5)
+    test_snr = base + rng.normal(0, 1.5, n)      # hovers around the threshold
+
+    result = analysis.analyze_run(_write_snr_run(tmp_path, t, test_snr))
+
+    assert result["positive"]
+    assert result["time_to_positivity_s"] is not None
+
+
 def test_warmup_ignores_an_early_false_line(tmp_path):
     """
     A line reading positive during the initial flow (before the warmup) must

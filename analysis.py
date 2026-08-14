@@ -222,11 +222,17 @@ def analyze_run(run_dir, test_snr=None, control_snr=None, bin_s=BIN_SECONDS):
     if t.size == 0:
         return {"run_dir": run_dir, "frames": 0, "error": "run contains no frames"}
 
-    # Re-derive detection from stored SNRs so thresholds are tunable here.
-    # Ignore the test line during the warmup: the initial sample flow can read
-    # as a line before the real one develops.
-    control_present = d["control_snr"] >= control_snr
-    test_present = (d["test_snr"] >= test_snr) & control_present & (t >= strip.TEST_WARMUP_S)
+    # Re-derive detection from stored SNRs so thresholds are tunable here, with
+    # hysteresis so a faint line does not flicker in and out. Ignore the test
+    # line during the warmup: the initial sample flow can read as a line before
+    # the real one develops.
+    hf = strip.SNR_HYSTERESIS_FRAC
+    control_present = strip.apply_hysteresis(d["control_snr"], control_snr, control_snr * hf)
+    # Zero the test SNR during the warmup before the hysteresis runs, so the
+    # initial flow cannot leave the gate stuck on past the warmup.
+    test_snr_series = np.where(t >= strip.TEST_WARMUP_S, d["test_snr"], 0.0)
+    test_detected = strip.apply_hysteresis(test_snr_series, test_snr, test_snr * hf)
+    test_present = test_detected & control_present
 
     control_onset, _ = latch_time(t, control_present)
     onset, confirmed = latch_time(t, test_present)

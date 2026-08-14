@@ -61,6 +61,11 @@ MIN_TC_SEPARATION_FRAC = 0.18
 CONTROL_SNR_THRESHOLD = 4.5
 TEST_SNR_THRESHOLD = 4.0
 
+# Detection hysteresis: once a band is detected it stays detected until its SNR
+# drops below this fraction of the threshold. Stops a faint line hovering near
+# the threshold from flickering in and out.
+SNR_HYSTERESIS_FRAC = 0.6
+
 # A detection must hold for STABILITY_VOTES of the last STABILITY_WINDOW frames
 STABILITY_WINDOW = 10
 STABILITY_VOTES = 7
@@ -791,3 +796,26 @@ class StabilityTracker:
     @property
     def stable_control(self):
         return sum(self.recent_control) >= self.votes
+
+
+class Hysteresis:
+    """
+    Sticky threshold: turns True when the value reaches `on_threshold` and stays
+    True until it drops below `off_threshold`. Keeps a faint band from
+    flickering in and out of detection near a single threshold.
+    """
+
+    def __init__(self, on_threshold, off_threshold):
+        self.on = on_threshold
+        self.off = off_threshold
+        self.state = False
+
+    def update(self, value):
+        self.state = value >= self.off if self.state else value >= self.on
+        return self.state
+
+
+def apply_hysteresis(values, on_threshold, off_threshold):
+    """Hysteresis over a whole series -- for re-deriving detection in analysis."""
+    gate = Hysteresis(on_threshold, off_threshold)
+    return np.array([gate.update(float(v)) for v in values], dtype=bool)

@@ -263,6 +263,13 @@ def record_run(picam2, run_dir, window_quad, bands):
     stability = strip.StabilityTracker()
     run = recorder.RunRecorder(run_dir)
 
+    # Hysteresis on each band's SNR so a faint line stays detected once seen.
+    hf = strip.SNR_HYSTERESIS_FRAC
+    control_gate = strip.Hysteresis(strip.CONTROL_SNR_THRESHOLD,
+                                    strip.CONTROL_SNR_THRESHOLD * hf)
+    test_gate = strip.Hysteresis(strip.TEST_SNR_THRESHOLD,
+                                 strip.TEST_SNR_THRESHOLD * hf)
+
     stopped = "interrupted"
 
     try:
@@ -278,9 +285,18 @@ def record_run(picam2, run_dir, window_quad, bands):
             result = strip.analyze(frame, window_quad, bands)
 
             if result is not None:
-                # Ignore the test line during the initial-flow warmup.
-                if elapsed < strip.TEST_WARMUP_S:
-                    result.test.present = False
+                # Sticky detection (hysteresis) so faint lines don't flicker.
+                # The test gate stays inactive during the warmup, so the initial
+                # flow can't leave it stuck on; the test also needs a valid
+                # control.
+                control_present = control_gate.update(result.control.snr)
+                if elapsed >= strip.TEST_WARMUP_S:
+                    test_active = test_gate.update(result.test.snr)
+                else:
+                    test_active = False
+                test_present = test_active and control_present
+                result.control.present = control_present
+                result.test.present = test_present
 
                 stability.update(result)
 
