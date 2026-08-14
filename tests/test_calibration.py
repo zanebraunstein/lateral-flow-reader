@@ -109,16 +109,16 @@ def test_snap_t_c_skips_a_missing_test_position():
     assert abs(c_idx - 150) <= 3
 
 
-def test_calibrated_path_uses_placement_invariant_detection(monkeypatch):
+def test_calibrated_path_snaps_to_positions(monkeypatch):
     """
-    The fix: with a calibration, analyze() must locate bands from the dominant
-    peaks (placement-invariant), not via the width-filtered candidate picker.
+    With a calibration, analyze() must locate bands by snapping near their known
+    positions, not via the width-filtered candidate picker.
     """
     called = []
-    real_find = strip.find_t_c
+    real_snap = strip.snap_t_c
     monkeypatch.setattr(
-        strip, "find_t_c",
-        lambda *a, **k: (called.append("find"), real_find(*a, **k))[1]
+        strip, "snap_t_c",
+        lambda *a, **k: (called.append("snap"), real_snap(*a, **k))[1]
     )
     monkeypatch.setattr(
         strip, "pick_t_c_from_peaks",
@@ -128,7 +128,7 @@ def test_calibrated_path_uses_placement_invariant_detection(monkeypatch):
     frame, quad = synth.window_scene_at(control_frac=0.20, test_frac=0.80)
     strip.analyze(frame, window_quad=quad, bands=(0.80, 0.20))
 
-    assert "find" in called
+    assert "snap" in called
     assert "pick" not in called
 
 
@@ -139,12 +139,12 @@ def test_detection_path_still_uses_the_candidate_picker(monkeypatch):
         strip, "pick_t_c_from_peaks",
         lambda *a, **k: called.append("pick") or (None, None)
     )
-    monkeypatch.setattr(strip, "find_t_c", lambda *a, **k: called.append("find") or (None, None))
+    monkeypatch.setattr(strip, "snap_t_c", lambda *a, **k: called.append("snap") or (None, None))
 
     strip.analyze(synth.cassette_frame(t_amp=50))
 
     assert "pick" in called
-    assert "find" not in called
+    assert "snap" not in called
 
 
 def test_calibrated_path_finds_broad_bands():
@@ -286,34 +286,38 @@ def test_bands_is_none_when_positions_absent():
     assert cal.bands is None
 
 
-def test_calibration_detects_a_test_line_it_did_not_learn():
+def test_control_at_its_position_is_not_read_as_the_test():
     """
-    Placement-invariant detection finds a test line from the dominant peaks even
-    if calibration only knew the control -- a test appearing later is caught.
+    The low-concentration bug: detection is anchored to positions, so the
+    control (near the control position) is never assigned to the test role even
+    when the test line is absent -- the test simply reads as not present.
     """
-    frame, quad = synth.window_scene(t_amp=50, c_amp=70)
+    # control only (left), no test line
+    frame, quad = synth.window_scene_at(control_frac=0.20, test_frac=0.80,
+                                        control_amp=80, test_amp=0)
+    result = strip.analyze(frame, window_quad=quad, bands=(0.80, 0.20))
 
-    result = strip.analyze(frame, window_quad=quad, bands=(None, strip.EXPECTED_C_FRAC))
-
+    n = len(result.profile)
     assert result.control.present
-    assert result.test.present
+    assert result.control.idx / n == pytest.approx(0.20, abs=0.06)   # stays the control
+    assert not result.test.present
 
 
-def test_detection_is_placement_invariant():
+def test_detection_tolerates_a_placement_shift():
     """
-    The core fix: shifting the cassette so the bands sit at different fractions
-    than calibration still detects both, because detection follows the peaks.
+    A cassette placed a bit off its calibrated position still detects: the
+    search radius covers the shift, while positions still anchor the labels.
     """
-    # Calibrated for bands near 0.20 / 0.80, but this cassette has them shifted
-    # to 0.35 / 0.65 -- both must still be found and correctly labelled.
-    frame, quad = synth.window_scene_at(control_frac=0.35, test_frac=0.65,
+    # Calibrated for bands near 0.20 / 0.80, but this cassette has them at
+    # 0.32 / 0.68 -- within the search radius, so both are found.
+    frame, quad = synth.window_scene_at(control_frac=0.32, test_frac=0.68,
                                         control_amp=80, test_amp=60)
     result = strip.analyze(frame, window_quad=quad, bands=(0.80, 0.20))
 
     n = len(result.profile)
     assert result.control.present and result.test.present
-    assert result.control.idx / n == pytest.approx(0.35, abs=0.05)
-    assert result.test.idx / n == pytest.approx(0.65, abs=0.05)
+    assert result.control.idx / n == pytest.approx(0.32, abs=0.05)
+    assert result.test.idx / n == pytest.approx(0.68, abs=0.05)
 
 
 def test_calibration_control_only_is_negative_not_invalid():
