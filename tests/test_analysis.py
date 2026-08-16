@@ -270,11 +270,14 @@ def test_binning_reduces_to_a_uniform_grid():
 
 
 def test_latch_backdates_to_first_detection():
+    # 1 s frame spacing; the line appears at t=5 and stays on
     t = np.arange(20, dtype=float)
     present = np.zeros(20, dtype=bool)
     present[5:] = True
 
-    onset, confirmed = analysis.latch_time(t, present, window=10, votes=7)
+    # 70% of a trailing 10 s window must be present to confirm
+    onset, confirmed = analysis.latch_time(t, present, window_s=10.0, frac=0.7)
 
-    assert onset == 5.0
-    assert confirmed == 11.0               # 7th consecutive detection
+    assert onset == 5.0                    # backdated to first detection
+    assert confirmed == 12.0               # 70% of the 10 s window first met here
+    assert confirmed >= onset

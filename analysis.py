@@ -24,6 +24,7 @@ import numpy as np
 
 import recorder
 import strip
+import viral_load
 
 
 # Frames arrive ~10x faster than the chemistry changes. Binning to a fixed
@@ -61,26 +62,37 @@ def bin_series(t, y, bin_s=BIN_SECONDS):
     return np.asarray(out_t), np.asarray(out_y)
 
 
-def latch_time(t, present, window=None, votes=None):
+def latch_time(t, present, window_s=None, frac=None):
     """
     When a boolean detection series becomes reliable.
 
-    Returns (onset, confirmed): `confirmed` is when the vote threshold was
-    met, `onset` is the first detection in the window that met it. The latch
-    necessarily lags the real appearance of the band, so report onset as the
-    time to positivity and keep `confirmed` for auditing.
-    """
-    window = strip.STABILITY_WINDOW if window is None else window
-    votes = strip.STABILITY_VOTES if votes is None else votes
+    A band is confirmed once it has been present for at least `frac` of a
+    trailing `window_s`-second window -- the time-based analogue of the live
+    frame-count vote, but independent of frame rate. Frames arrive far faster
+    than the chemistry changes, so a frame-count window is a fraction of a
+    second at real capture rates and a brief noise blip can trip it; measuring
+    presence over several seconds rejects those transients while still
+    tolerating a faint line that flickers around the threshold.
 
+    Returns (onset, confirmed): `confirmed` is when the presence fraction was
+    first met, `onset` is backdated to the first detection in that window. The
+    latch necessarily lags the real appearance of the band, so report onset as
+    the time to positivity and keep `confirmed` for auditing.
+    """
+    window_s = strip.STABILITY_WINDOW_S if window_s is None else window_s
+    frac = strip.STABILITY_FRAC if frac is None else frac
+
+    t = np.asarray(t, dtype=float)
     present = np.asarray(present, dtype=bool)
 
     for i in range(len(present)):
-        lo = max(0, i - window + 1)
-        chunk = present[lo:i + 1]
+        window = (t >= t[i] - window_s) & (t <= t[i])
 
-        if chunk.sum() >= votes:
-            first = lo + int(np.argmax(chunk))
+        # A few frames are needed to judge a fraction, then enough of them
+        # present. argmax finds the first detection inside the window (which
+        # must exist, since the mean cleared a positive fraction).
+        if window.sum() >= 3 and present[window].mean() >= frac:
+            first = int(np.argmax(window & present))
             return float(t[first]), float(t[i])
 
     return None, None
@@ -331,6 +343,15 @@ def analyze_run(run_dir, test_snr=None, control_snr=None, bin_s=BIN_SECONDS):
     out["series"] = {"time_s": tb.tolist(), "test_area": area.tolist(),
                      "tc_area_ratio": ratio.tolist()}
 
+    # Predict concentration (viral load) from the plateau density, if a
+    # calibration exists. Only for a valid, positive run: a negative or
+    # control-less run has no load to report, and saying so beats inventing one.
+    calib = viral_load.load()
+    if calib is not None and out["valid"] and out["positive"]:
+        out["viral_load"] = viral_load.predict(ratio_level, calib)
+    else:
+        out["viral_load"] = None
+
     return out
 
 
@@ -364,7 +385,8 @@ def format_report(r):
     if r["positive"]:
         lines.append(f"  onset      {r['time_to_positivity_s']:.1f} s")
         lines.append(f"  confirmed  {r['confirmed_at_s']:.1f} s  "
-                     f"({strip.STABILITY_VOTES} of {strip.STABILITY_WINDOW} frames)")
+                     f"(held {strip.STABILITY_FRAC * 100:.0f}% of "
+                     f"{strip.STABILITY_WINDOW_S:.0f} s)")
     else:
         lines.append("  never detected -- negative for the run duration")
     lines.append("")
@@ -402,6 +424,14 @@ def format_report(r):
         if not rt["plateaued"]:
             lines.append("  note: line had not plateaued; rate is over the "
                          "development so far.")
+
+    # Predicted viral load: only shown when a calibration was found. The
+    # estimate comes from density alone (the metric that predicts load best);
+    # rate and time above are independent cross-checks, not inputs.
+    if "viral_load" in r:
+        lines.append("")
+        lines.append("Predicted viral load (from density, power-law calibration)")
+        lines += viral_load.format_prediction(r["viral_load"])
 
     return "\n".join(lines)
 

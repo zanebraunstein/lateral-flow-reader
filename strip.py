@@ -72,9 +72,19 @@ TEST_SNR_THRESHOLD = 4.0
 # the threshold from flickering in and out.
 SNR_HYSTERESIS_FRAC = 0.6
 
-# A detection must hold for STABILITY_VOTES of the last STABILITY_WINDOW frames
+# Live display: a detection must hold for STABILITY_VOTES of the last
+# STABILITY_WINDOW frames in which a cassette was visible.
 STABILITY_WINDOW = 10
 STABILITY_VOTES = 7
+
+# Offline onset (time to positivity): the deliverable onset is latched when the
+# line has been present for STABILITY_FRAC of a trailing STABILITY_WINDOW_S
+# window. This is defined in SECONDS, not frames, because frames arrive far
+# faster than the chemistry (~28 fps), so a 10-frame vote is only ~0.35 s -- a
+# brief noise blip trips it and scrambles the onset. A multi-second window
+# rejects transients while still tolerating a faint line that flickers.
+STABILITY_WINDOW_S = 15.0
+STABILITY_FRAC = 0.7
 
 # The initial sample flow front can read as a test line before the real one
 # develops, so ignore the test line for this long after the run starts.

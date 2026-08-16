@@ -286,15 +286,14 @@ def record_run(picam2, run_dir, window_quad, bands):
 
             if result is not None:
                 # Sticky detection (hysteresis) so faint lines don't flicker.
-                # The test gate stays inactive during the warmup, so the initial
-                # flow can't leave it stuck on; the test also needs a valid
-                # control.
+                # The overlay reflects the true detection so the operator gets
+                # live confirmation the T line is seen; the test also needs a
+                # valid control. The warmup (ignoring the initial flow front as
+                # a false onset) is applied in offline analysis, which re-derives
+                # detection from the recorded SNR series -- so it must NOT blank
+                # the live marker here, or a genuine T line looks undetected.
                 control_present = control_gate.update(result.control.snr)
-                if elapsed >= strip.TEST_WARMUP_S:
-                    test_active = test_gate.update(result.test.snr)
-                else:
-                    test_active = False
-                test_present = test_active and control_present
+                test_present = test_gate.update(result.test.snr) and control_present
                 result.control.present = control_present
                 result.test.present = test_present
 
