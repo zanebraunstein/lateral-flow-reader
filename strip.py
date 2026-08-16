@@ -367,7 +367,7 @@ def pick_peak_near(profile, candidates, expected_frac, radius_frac):
     return best
 
 
-def snap_to_peak(profile, expected_frac, radius_frac):
+def snap_to_peak(profile, expected_frac, radius_frac, exclude=None):
     """
     Position of the tallest local maximum within `radius_frac` of the expected
     fractional position -- the visible peak nearest where the band should be.
@@ -375,6 +375,10 @@ def snap_to_peak(profile, expected_frac, radius_frac):
     Unlike the candidate picker this ignores band width, so a broad band that
     width-filtering would drop is still located; SNR decides presence. Returns
     None only if the window contains no local maximum (a flat region).
+
+    `exclude`, if given, is another band's index whose vicinity is masked out of
+    the search, so this band cannot snap onto it -- used to stop the test from
+    landing on a dominant control its wide window happens to reach.
     """
     n = len(profile)
 
@@ -385,10 +389,18 @@ def snap_to_peak(profile, expected_frac, radius_frac):
     lo = max(1, expected - radius)
     hi = min(n - 2, expected + radius)
 
+    ex_lo = ex_hi = None
+    if exclude is not None:
+        sep = int(MIN_TC_SEPARATION_FRAC * n)
+        ex_lo, ex_hi = exclude - sep, exclude + sep
+
     best = None
     best_height = -1e18
 
     for i in range(lo, hi + 1):
+        if ex_lo is not None and ex_lo <= i <= ex_hi:
+            continue
+
         # A local maximum with real relief on at least one side, so a flat
         # (saturated) region is not mistaken for a peak.
         rises = profile[i] >= profile[i - 1] and profile[i] >= profile[i + 1]
@@ -406,12 +418,21 @@ def snap_t_c(profile, test_frac, control_frac, radius_frac=SEARCH_RADIUS_FRAC):
     Locate the test and control bands by snapping to the tallest peak near each
     calibrated position. For the fixed-rig path, where the positions are known
     and the width filter only gets in the way.
-    """
-    t_idx = None if test_frac is None else snap_to_peak(profile, test_frac, radius_frac)
-    c_idx = None if control_frac is None else snap_to_peak(profile, control_frac, radius_frac)
 
-    # If both snapped to the same peak, keep it as the control (the anchor).
-    if t_idx is not None and t_idx == c_idx:
+    The control is anchored first, then the test is snapped with the control's
+    vicinity masked out. Otherwise a wide search window can reach the dominant
+    control peak, snap the test onto it, and discard the test as a duplicate --
+    so a clearly visible test line reads as absent whenever the control
+    out-shines it (the low-dose / off-calibration failure mode).
+    """
+    c_idx = None if control_frac is None else snap_to_peak(profile, control_frac, radius_frac)
+    t_idx = None if test_frac is None else snap_to_peak(
+        profile, test_frac, radius_frac, exclude=c_idx
+    )
+
+    # A peak too close to the control is its shoulder, not a second band.
+    if t_idx is not None and c_idx is not None and \
+            abs(t_idx - c_idx) < int(MIN_TC_SEPARATION_FRAC * len(profile)):
         t_idx = None
 
     return t_idx, c_idx

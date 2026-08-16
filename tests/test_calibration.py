@@ -303,6 +303,26 @@ def test_control_at_its_position_is_not_read_as_the_test():
     assert not result.test.present
 
 
+def test_dominant_control_does_not_steal_the_test_snap():
+    """
+    Regression: a strong control whose wide search window reaches the test must
+    not capture the test's snap and leave the test unread. Even with the
+    calibration a little off (test_frac to the left of the real test line), the
+    fainter test must still be located at its own peak, not discarded as a
+    duplicate of the control.
+    """
+    xs = np.arange(240)
+    prof = 20.0 * np.exp(-((xs - 47) / 4.0) ** 2)     # dominant control ~0.20
+    prof += 6.0 * np.exp(-((xs - 146) / 6.0) ** 2)    # fainter test ~0.61
+
+    # Calibrated test position (0.42) sits left of the real line (0.61), so the
+    # wide window spans both bands -- the case that used to lose the test.
+    t_idx, c_idx = strip.snap_t_c(prof, 0.42, 0.20, strip.CAL_SEARCH_RADIUS_FRAC)
+
+    assert abs(c_idx - 47) <= 2
+    assert t_idx is not None and abs(t_idx - 146) <= 3
+
+
 def test_detection_tolerates_a_placement_shift():
     """
     A cassette placed a bit off its calibrated position still detects: the
