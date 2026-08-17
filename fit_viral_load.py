@@ -63,7 +63,9 @@ def read_labels(path, runs_dir):
 
 
 def collect(labels_path, runs_dir, test_snr=None, control_snr=None):
-    densities, concs = [], []
+    """Return ({metric: array}, concentrations) over the labelled runs."""
+    samples = {m: [] for m in viral_load.METRICS}
+    concs = []
 
     for run_dir, conc in read_labels(labels_path, runs_dir):
         if not os.path.isfile(os.path.join(run_dir, "profiles.npz")):
@@ -81,11 +83,19 @@ def collect(labels_path, runs_dir, test_snr=None, control_snr=None):
             print(f"  skip {run_dir} (conc {conc:g}): no usable density")
             continue
 
-        densities.append(density)
+        # Rate and time may be absent (a faint or non-latching line); fit() drops
+        # the missing ones per metric, so store NaN and keep the density point.
+        rate = result["rate"]["test_area_per_s"]
+        time = result["time_to_positivity_s"]
+        samples["density"].append(density)
+        samples["rate"].append(rate if rate is not None else np.nan)
+        samples["time"].append(time if time is not None else np.nan)
         concs.append(conc)
-        print(f"  {os.path.basename(run_dir):<20} conc {conc:>6g}  density {density:.4f}")
+        print(f"  {os.path.basename(run_dir):<20} conc {conc:>6g}  "
+              f"density {density:.4f}  rate {'--' if rate is None else format(rate, '.4f')}  "
+              f"time {'--' if time is None else format(time, '.1f')}")
 
-    return np.array(densities), np.array(concs)
+    return {m: np.array(v) for m, v in samples.items()}, np.array(concs)
 
 
 def main(argv=None):
@@ -99,30 +109,32 @@ def main(argv=None):
     args = p.parse_args(argv)
 
     print(f"Reading labelled runs from {args.labels} ...")
-    densities, concs = collect(args.labels, args.runs_dir, args.test_snr, args.control_snr)
+    samples, concs = collect(args.labels, args.runs_dir, args.test_snr, args.control_snr)
 
-    if densities.size < 3:
-        sys.exit(f"\nonly {densities.size} usable calibration points -- need at least 3.")
+    if concs.size < 3:
+        sys.exit(f"\nonly {concs.size} usable calibration points -- need at least 3.")
 
-    calib = viral_load.fit(densities, concs, units=args.units)
-
-    # Leave-one-out fold error, so the report reflects real predictive spread.
-    fold = []
-    for i in range(densities.size):
-        keep = np.ones(densities.size, bool)
-        keep[i] = False
-        c = viral_load.fit(densities[keep], concs[keep], units=args.units)
-        pred = viral_load.predict(densities[i], c)["estimate"]
-        fold.append(max(pred / concs[i], concs[i] / pred))
-    fold = np.array(fold)
-
+    calib = viral_load.fit(samples, concs, units=args.units)
     calib.save(args.out)
 
-    print(f"\nFit {calib.n} points:  conc = {np.exp(calib.a):.1f} * density^{calib.b:.3f}"
-          f"{'  (' + calib.units + ')' if calib.units else ''}")
-    print(f"  density range   {calib.dens_min:.3f} .. {calib.dens_max:.3f}")
-    print(f"  68% fold band   x{np.exp(calib.resid_sd):.2f}")
-    print(f"  leave-one-out   median x{np.median(fold):.2f},  90th pct x{np.percentile(fold, 90):.2f}")
+    print(f"\nFit from {concs.size} runs{'  (' + calib.units + ')' if calib.units else ''}:")
+    for name in viral_load.METRICS:
+        f = calib.metrics.get(name)
+        if f is None:
+            print(f"  {name:<8} -- not enough points")
+            continue
+        star = "  <- most reliable" if name == calib.primary else ""
+        # Leave-one-out median fold error for this metric.
+        m = calib.metrics[name]
+        x = np.array(samples[name], float); c = concs.astype(float)
+        ok = np.isfinite(x) & (x > 0)
+        lx, ly = np.log(x[ok]), np.log(c[ok]); fold = []
+        for i in range(ok.sum()):
+            keep = np.ones(ok.sum(), bool); keep[i] = False
+            bb, aa = np.polyfit(lx[keep], ly[keep], 1)
+            fold.append(max(np.exp(aa + bb * lx[i]) / c[ok][i], c[ok][i] / np.exp(aa + bb * lx[i])))
+        print(f"  {name:<8} conc = {np.exp(m.a):8.1f} * x^{m.b:+.3f}   "
+              f"68% band x{np.exp(m.resid_sd):.2f}   LOO median x{np.median(fold):.2f}{star}")
     print(f"Saved calibration to {args.out}")
     return 0
 

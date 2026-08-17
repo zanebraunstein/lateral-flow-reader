@@ -343,12 +343,16 @@ def analyze_run(run_dir, test_snr=None, control_snr=None, bin_s=BIN_SECONDS):
     out["series"] = {"time_s": tb.tolist(), "test_area": area.tolist(),
                      "tc_area_ratio": ratio.tolist()}
 
-    # Predict concentration (viral load) from the plateau density, if a
+    # Predict concentration (viral load) from each metric on its own, if a
     # calibration exists. Only for a valid, positive run: a negative or
     # control-less run has no load to report, and saying so beats inventing one.
     calib = viral_load.load()
     if calib is not None and out["valid"] and out["positive"]:
-        out["viral_load"] = viral_load.predict(ratio_level, calib)
+        out["viral_load"] = viral_load.predict({
+            "density": ratio_level,
+            "rate": out["rate"]["test_area_per_s"],
+            "time": out["time_to_positivity_s"],
+        }, calib)
     else:
         out["viral_load"] = None
 
@@ -425,12 +429,12 @@ def format_report(r):
             lines.append("  note: line had not plateaued; rate is over the "
                          "development so far.")
 
-    # Predicted viral load: only shown when a calibration was found. The
-    # estimate comes from density alone (the metric that predicts load best);
-    # rate and time above are independent cross-checks, not inputs.
+    # Predicted viral load: only shown when a calibration was found. Each metric
+    # predicts independently (density is the most reliable); three readings that
+    # agree corroborate each other, and disagreement flags a suspect run.
     if "viral_load" in r:
         lines.append("")
-        lines.append("Predicted viral load (from density, power-law calibration)")
+        lines.append("Predicted viral load (each metric's own calibration)")
         lines += viral_load.format_prediction(r["viral_load"])
 
     return "\n".join(lines)

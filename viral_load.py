@@ -1,20 +1,23 @@
 """
 Viral-load prediction: the inverse of measurement.
 
-Measurement turns a run into metrics; this turns a metric back into an estimated
-concentration, using a calibration fit from runs of KNOWN concentration.
+Measurement turns a run into metrics; this turns those metrics back into an
+estimated concentration, using calibrations fit from runs of KNOWN concentration.
 
-Which metric? Empirically (leave-one-out CV on the calibration set), the plateau
-T/C density predicts concentration best on its own -- a power law,
-conc = k * density^b. Adding rate or time-to-positivity as extra regressors makes
-out-of-sample prediction WORSE, not better: with a handful of calibration points
-the extra freedom overfits, and time-to-positivity is too noisy at low dose to
-carry load information. So the model is deliberately single-feature; rate and
-onset stay in the report as independent cross-checks, not as inputs.
+Each of the three metrics gets its OWN single-feature power-law calibration and
+its own estimate, so a report shows what density, rate, and time each predict on
+their own -- three independent readings that should agree. They rarely predict
+equally well: on the calibration data density is tightest, then rate, then time
+(a line's onset is noisy at low dose). A single combined model is deliberately
+NOT used -- with a handful of calibration points, feeding all three into one
+regression overfits and predicts worse than density alone. Keeping them separate
+makes each metric's estimate and its uncertainty legible, and lets disagreement
+between them flag a suspect run.
 
-The fit lives in log-log space because a dose response is multiplicative: an
-error is naturally "within a factor of x", not "within +/- n units". The stored
-residual spread is therefore a fold (multiplicative) band.
+Each fit lives in log-log space because a dose response is multiplicative: an
+error is naturally "within a factor of x", not "within +/- n units". Density and
+rate rise with concentration (positive exponent); time-to-positivity falls
+(negative exponent). The stored residual spread is a fold (multiplicative) band.
 
 Fit or refit from labelled runs with fit_viral_load.py; this module is the model
 and the predictor, and stays free of OpenCV so it can be exercised offline.
@@ -23,76 +26,89 @@ and the predictor, and stays free of OpenCV so it can be exercised offline.
 import json
 import os
 from dataclasses import dataclass, asdict
-from typing import Optional
 
 import numpy as np
 
 
 CALIBRATION_PATH = "viral_load.json"
 
+# The metrics predicted from, in report order, with human labels. Keys match the
+# values dict predict() is called with.
+METRICS = ("density", "rate", "time")
+LABELS = {"density": "density (T/C)", "rate": "rate", "time": "time to pos."}
+
 
 @dataclass
-class LoadCalibration:
+class MetricFit:
     """
-    Power-law calibration: ln(conc) = a + b * ln(density).
+    One metric's power law: ln(conc) = a + b * ln(metric).
 
-    `resid_sd` is the standard deviation of the log residuals -- the
-    multiplicative uncertainty, so a prediction's 68% band is [est / e^sd,
-    est * e^sd]. `dens_min`/`dens_max` bound the densities the fit was trained
-    on; outside them a prediction is extrapolation. `faint_below` marks the
-    low-density region where the fit is least trustworthy (a faint line carries
-    little load information).
+    `resid_sd` is the std of the log residuals -- the multiplicative uncertainty,
+    so a 68% band is [est / e^sd, est * e^sd]. `lo`/`hi` bound the metric values
+    the fit was trained on; outside them is extrapolation.
     """
     a: float
     b: float
     resid_sd: float
-    dens_min: float
-    dens_max: float
-    faint_below: float
+    lo: float
+    hi: float
     n: int
-    feature: str = "density_tc_ratio"
+
+
+@dataclass
+class LoadCalibration:
+    metrics: dict            # metric name -> MetricFit
     units: str = ""
+    primary: str = "density"   # the most reliable metric (smallest residual sd)
 
     def save(self, path=CALIBRATION_PATH):
         with open(path, "w") as handle:
             json.dump(asdict(self), handle, indent=2)
 
 
-def fit(densities, concentrations, units=""):
-    """
-    Fit the power law from paired (density, concentration) samples.
-
-    Densities and concentrations must be positive; non-finite or non-positive
-    pairs are dropped. Needs at least three usable points.
-    """
-    d = np.asarray(densities, dtype=float)
+def _fit_one(metric_vals, concentrations):
+    """Power-law fit for one metric, or None if fewer than three usable pairs."""
+    x = np.asarray(metric_vals, dtype=float)
     c = np.asarray(concentrations, dtype=float)
 
-    ok = np.isfinite(d) & np.isfinite(c) & (d > 0) & (c > 0)
-    d, c = d[ok], c[ok]
+    ok = np.isfinite(x) & np.isfinite(c) & (x > 0) & (c > 0)
+    x, c = x[ok], c[ok]
 
-    if d.size < 3:
-        raise ValueError(f"need >= 3 usable calibration points, got {d.size}")
+    if x.size < 3:
+        return None
 
-    x, y = np.log(d), np.log(c)
-    b, a = np.polyfit(x, y, 1)
+    lx, ly = np.log(x), np.log(c)
+    b, a = np.polyfit(lx, ly, 1)
+    resid_sd = float((ly - (a + b * lx)).std(ddof=2))
 
-    resid = y - (a + b * x)
-    # ddof=2: two parameters were fitted. Guard the tiny-sample case.
-    resid_sd = float(resid.std(ddof=2)) if d.size > 2 else 0.0
+    return MetricFit(a=float(a), b=float(b), resid_sd=resid_sd,
+                     lo=float(x.min()), hi=float(x.max()), n=int(x.size))
 
-    return LoadCalibration(
-        a=float(a),
-        b=float(b),
-        resid_sd=resid_sd,
-        dens_min=float(d.min()),
-        dens_max=float(d.max()),
-        # Least-trustworthy region: the bottom fifth of the trained density
-        # range, where the line is faint and load information is thin.
-        faint_below=float(d.min() + 0.2 * (d.max() - d.min())),
-        n=int(d.size),
-        units=units,
-    )
+
+def fit(samples, concentrations, units=""):
+    """
+    Fit a power law per metric from paired samples.
+
+    `samples` maps metric name -> array of that metric across the calibration
+    runs (aligned with `concentrations`); missing/non-positive entries are
+    dropped per metric. A metric with fewer than three usable points is skipped.
+    Needs at least `density`.
+    """
+    fits = {}
+    for name in METRICS:
+        if name not in samples:
+            continue
+        fit_one = _fit_one(samples[name], concentrations)
+        if fit_one is not None:
+            fits[name] = fit_one
+
+    if "density" not in fits:
+        raise ValueError("need >= 3 usable density points to calibrate")
+
+    # Most reliable = tightest residual spread; used as the headline estimate.
+    primary = min(fits, key=lambda k: fits[k].resid_sd)
+
+    return LoadCalibration(metrics=fits, units=units, primary=primary)
 
 
 def load(path=CALIBRATION_PATH):
@@ -103,70 +119,79 @@ def load(path=CALIBRATION_PATH):
     with open(path) as handle:
         data = json.load(handle)
 
-    return LoadCalibration(**data)
+    metrics = {k: MetricFit(**v) for k, v in data["metrics"].items()}
+    return LoadCalibration(metrics=metrics, units=data.get("units", ""),
+                           primary=data.get("primary", "density"))
 
 
-def predict(density, calib):
-    """
-    Estimate concentration from a density, with a multiplicative uncertainty
-    band and confidence flags.
-
-    Returns None if there is nothing to predict (no calibration, or no test
-    line). Otherwise a dict with the point estimate, 68%/95% fold bands, and
-    `extrapolated` / `low_confidence` flags so a caller never reports a number
-    more precisely than it is earned.
-    """
-    if calib is None or density is None or not np.isfinite(density) or density <= 0:
+def _predict_one(value, fit):
+    if fit is None or value is None or not np.isfinite(value) or value <= 0:
         return None
 
-    ln_est = calib.a + calib.b * np.log(density)
-    est = float(np.exp(ln_est))
-
-    sd = calib.resid_sd
+    ln_est = fit.a + fit.b * np.log(value)
+    sd = fit.resid_sd
 
     return {
-        "estimate": est,
+        "estimate": float(np.exp(ln_est)),
         "lo68": float(np.exp(ln_est - sd)),
         "hi68": float(np.exp(ln_est + sd)),
         "lo95": float(np.exp(ln_est - 2 * sd)),
         "hi95": float(np.exp(ln_est + 2 * sd)),
-        "density": float(density),
-        "units": calib.units,
-        # Outside the trained range the power law is unverified; below it the
-        # estimate is a lower bound, above it an upper bound.
-        "extrapolated": density < calib.dens_min or density > calib.dens_max,
-        "extrapolation_side": (
-            "below" if density < calib.dens_min
-            else "above" if density > calib.dens_max
-            else None
-        ),
-        "low_confidence": density < calib.faint_below,
+        "value": float(value),
+        "extrapolated": value < fit.lo or value > fit.hi,
     }
 
 
-def format_prediction(pred):
-    """One or more report lines for a prediction dict (or a 'no estimate' line)."""
-    if pred is None:
+def predict(values, calib):
+    """
+    Estimate concentration from each metric independently.
+
+    `values` maps metric name -> measured value (any may be None/missing).
+    Returns a dict metric -> estimate dict (or None if that metric was not
+    measured or not calibrated), or None if there is no calibration at all.
+    """
+    if calib is None:
+        return None
+
+    out = {}
+    for name in METRICS:
+        pred = _predict_one(values.get(name), calib.metrics.get(name))
+        if pred is not None:
+            pred["primary"] = (name == calib.primary)
+        out[name] = pred
+    return out
+
+
+def format_prediction(preds):
+    """Report lines for a per-metric prediction dict (or a 'no estimate' line)."""
+    if not preds or all(p is None for p in preds.values()):
         return ["  not available (no calibration or no test line)"]
 
-    u = f" {pred['units']}" if pred["units"] else ""
-
     def q(v):
-        return f"{v:,.0f}{u}" if v >= 10 else f"{v:.2g}{u}"
+        return f"{v:,.0f}" if v >= 10 else f"{v:.2g}"
 
-    lines = [
-        f"  estimate     {q(pred['estimate'])}",
-        f"  68% band     {q(pred['lo68'])} - {q(pred['hi68'])}",
-        f"  95% band     {q(pred['lo95'])} - {q(pred['hi95'])}",
-    ]
+    lines, estimates = [], []
+    for name in METRICS:
+        p = preds.get(name)
+        label = LABELS[name]
+        if p is None:
+            lines.append(f"  {label:<14} --   (not measured)")
+            continue
 
-    if pred["extrapolated"]:
-        side = pred["extrapolation_side"]
-        bound = "lower bound" if side == "below" else "upper bound"
-        lines.append(f"  note: density is {side} the calibration range; "
-                     f"read the estimate as the {bound}.")
-    elif pred["low_confidence"]:
-        lines.append("  note: faint line (low density); estimate is the least "
-                     "certain part of the range.")
+        tag = "   <- most reliable" if p["primary"] else ""
+        if p["extrapolated"]:
+            tag += "   (metric outside calibrated range)"
+
+        lines.append(f"  {label:<14} {q(p['estimate']):>7}   "
+                     f"(68% {q(p['lo68'])}-{q(p['hi68'])}){tag}")
+        estimates.append(p["estimate"])
+
+    # If the three readings disagree wildly, the run is suspect -- say so rather
+    # than let the reader trust a single number.
+    if len(estimates) >= 2 and min(estimates) > 0:
+        spread = max(estimates) / min(estimates)
+        if spread > 2.0:
+            lines.append(f"  note: estimates span x{spread:.1f}; the metrics "
+                         f"disagree, so treat this run with caution.")
 
     return lines
